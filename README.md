@@ -1,0 +1,66 @@
+# SRC files notes
+
+### simulator.py
+
+- [asyncio library](https://realpython.com/async-io-python/) - provides ability to run concurrent code, you can run multiple tasks at the same time without making your computer wait around doing nothing. It helps your program multitask efficiently, especially when it is waiting on the internet or a database.
+
+- [confluent_kafka](https://www.youtube.com/watch?v=06iRM1Ghr1k)
+  - Used for a distributed log (topic) system providing events in real-time. Enrichment in DB parlance means joins.
+  - Producers are write-only connections
+
+- [telemetry](https://www.merriam-webster.com/simple/telemetry)
+  The process of using special equipment to take measurements of something (such as pressure, speed, or temperature) and send them by radio to another place.
+
+- [Smart Grid Frequency Window](https://whatissmartenergy.org/smart-grid-and-power-quality)
+  A common smart grid frequency window is typically maintained within ±0.050 Hz from 60 Hz in North America or 50 Hz in Europe. This narrow tolerance is crucial for ensuring the stability and reliability of the power system. Here frequency refers to the sumber of cycles per second.
+
+  A smart grid's 100 ms emit interval represents a reporting rate of 10 telemetry updates per second. In a 60 Hz electrical system, this 100 ms window captures precisely 6 complete AC power cycles per report (since one 60 Hz cycle takes 16.67 ms), allowing smart meters to aggregate and stream localized frequency stability data rapidly.
+
+  Understanding the relationship.
+  - Cycle Count: At 60 cycles per second, a 100 ms collection window spans (60 x 0.1 = 6) full cycles of the alternating current waveform.
+
+  - Resolution vs. Speed: Emitting data every 100 ms enables monitoring devices to spot short-term **rate-of-change of frequency (RoCoF)** and **feed fast frequency response (FFR)** automation without overwhelming communication networks with raw, cycle-by-cycle (16.67 ms) analog samples.
+
+  - Averaging Window: High-speed sensors use the 100 ms block to compute a stable rolling average of the instantaneous frequency, filtering out background noise while still detecting real grid disturbances.
+
+  n a 60 Hz power system, serious electrical faults cause instant changes in the voltage and current waves. The 100 ms emit interval is the perfect balance for high-speed automated defense systems. It is fast enough to catch a disaster in real time, but slow enough to send stable data.
+
+  Here is exactly how grid operators and automated systems use this 100 ms window to detect and fix faults.
+
+1. Spotting Fast Frequency Drops Using **rate-of-change of frequency (RoCoF)**
+   When a major power plant fails, grid frequency drops instantly.
+
+- The 100 ms Advantage: Advanced grid sensors look at the Rate of Change of Frequency (RoCoF).
+
+- The Math: Because 100 ms covers exactly 6 power cycles, the sensor can compare these 6 cycles to the previous 6 cycles.
+
+- The Action: If the frequency drops drastically between two 100 ms updates, the system flags a massive fault before the grid crashes.
+
+2. Identifying Phasor and Phase Angle Jumps
+
+A fault like a downed power line changes the "phase angle" of the electricity.
+
+- Phasor Measurement Units (PMUs): These high-speed grid sensors measure the exact alignment of the 60 Hz wave.
+
+- The 100 ms Advantage: PMUs stream data 10 to 30 times per second. A 100 ms interval captures these sudden shifts in the wave alignment.
+
+- The Action: A sudden jump in the phase angle between two 100 ms reports tells computers exactly where a line broke.
+
+3. Triggering Fast Frequency Response (FFR)
+
+Traditional power plants take seconds or minutes to respond to a fault. Modern grids use batteries.
+
+- The 100 ms Advantage: Large scale battery storage systems can inject power into the grid in under 50 milliseconds.
+
+- The Action: By receiving a fault alert in the 100 ms data packet, automated software can trigger utility-scale batteries to dump power into the grid instantly, stopping a blackout.
+
+4. Isolating the Fault (Breaker Coordination)
+
+Grids use circuit breakers to cut off broken lines so the rest of the city keeps its power.
+
+The 100 ms Advantage: Mechanical breakers take about 50 to 80 ms to physically open.
+
+The Action: The 100 ms data window matches this physical timeline. It allows the grid's computer brain to see the fault, confirm which breaker opened, and reroute power in the next 100 ms window.
+
+- [Home Appliance Voltage North America](https://whatissmartenergy.org/smart-grid-and-power-quality)
+  Power quality refers to electricity that consistently meets the agreed-upon specifications for optimal and efficient use in home electronics. In North America, home appliances and electronics are designed to operate within a range of 106 volts to 127 volts of alternating current (AC). However, equipment operates most efficiently in a range of 114-126 volts (quantity of electricity), which is the standard for delivered voltage in North America.
