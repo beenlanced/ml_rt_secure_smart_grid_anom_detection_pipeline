@@ -69,7 +69,11 @@ from kafka_monitor import delivery_report
         
 #     assert "🔥 Critical: All Kafka brokers are down" in caplog.text
 
-
+####
+# This test suite mocks both the KafkaError and Message objects. 
+# It verifies that your callback reacts correctly to successes, general errors, 
+# and specific network errors.
+####
 
 @pytest.fixture
 def mock_message() -> MagicMock:
