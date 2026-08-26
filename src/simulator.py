@@ -3,30 +3,34 @@ import json
 import logging
 import random
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from confluent_kafka import KafkaError, Message, Producer
 
+
 # Configuration constants
-BOOTSTRAP_SERVERS = 'localhost:19092' #set aside unique port for Kafka streaming broker
-TOPIC_NAME = 'smartgrid-telemetry'
-NUM_DEVICES = 1000  # Scale up number of simulated smart meters as needed for performance testing
+BOOTSTRAP_SERVERS = 'localhost:19092' # Initial address of local Kafka broker configuration to discover full cluster
+TOPIC_NAME = 'smartgrid-telemetry' # Sets target Kafka log stream where telemetry data is gets appended
+NUM_DEVICES = 1000  # Parallel virtual smart meters manage concurrently
 EMIT_INTERVAL_SECONDS = 0.1  # 100ms standard grid frequency window - reporting rate of 10 telemetry updates per second
 
-
 # Set up logging for production readiness
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+#logger = logging.getLogger(__name__)
 logger = logging.getLogger("KafkaCallback")
 
 # Kafka Delivery Callback for Network Performance Monitoring
-def deliver_report(err: Optional[KafkaError], msg: Message) -> None:
+def delivery_report(err: Optional[KafkaError], msg: Message) -> None:
     """
     Handles the result of a Kafka message production attempt with
-    network error handling.
+    network error handling. Defines an asynchronous callback hook
+    triggered by the Kafka background thread whenever an acknowlegement
+    from the cluster succeeds or permanently fails.
 
     Args:
-        err: The error object if the delivery failed, or None if successful.
-        msg: The Kafka message object containing metadata like topic and partition.
+        err (Optional[KafkaError]): The error object if the delivery failed, or None if successful.
+        msg (Message): The Kafka message object containing metadata like topic and partition.
     """
     # Check if an error occurred during delivery
     if err is not None:
@@ -48,3 +52,143 @@ def deliver_report(err: Optional[KafkaError], msg: Message) -> None:
     # else:
     #     print(f"✅ Delivered to {msg.topic()} [{msg.partition()}]")
 
+async def kafka_flush_worker(producer: Producer) -> None:
+    """
+        Dedicated background loop to handle callbacks and clear network IO queues.
+        Defines a long-running companion task responsible for servicing underlying
+        native network buffers.
+
+        Args:
+            producer (Producer): Producer takes data (like the smart meter readings) and sends
+                                 (publishes) it to a central sytem. 
+    """
+    while True:
+        producer.poll(0.01)  # Check queues for completed events trigger delivery_reports. Process pkts for 10ms
+        await asyncio.sleep(0.01)  # Yield control to allow virtual meter to generate additional messages
+
+async def simulate_smart_meter(device_id: int, producer: Producer):
+    """
+        Simulates a single physical smart meter node tracking electrical telemetry.
+    
+        Args:
+            device_id (int): The id of the of the smart meter
+            producer (Producer): Producer takes data (like the smart meter readings) and sends
+                                 (publishes)it to a central sytem 
+    """
+
+    # Establish a baseline grid state for this node
+    base_voltage = 120.0  # US standard residential voltage
+    base_current = 15.0   # Amps
+
+    try:
+        while True:
+            # Inject minor natural time-series fluctuations (Gaussian noise)
+            voltage = random.gauss(base_voltage, 0.5)
+            current = random.gauss(base_current, 1.0)
+            
+            # Randomly inject a malicious cyber-anomaly (0.5% chance) - Anom Detect portion
+            is_anomaly = random.random() < 0.005
+            if is_anomaly:
+                voltage = random.uniform(140.0, 160.0)  # Mimic severe real-grid malfunction of over-voltage spike
+                current = random.uniform(0.0, 2.0) # Mimic low current real-grid malfunction 
+
+            # Build structural data payload matching OT/IoT pipeline formats
+            # normalize asset tags (device_id's) so that IDs from different gateways have a predictable format
+            payload = {
+                "timestamp": time.time(),
+                "device_id": f"meter_{device_id:05d}", # (e.g., meter_00007)
+                "metrics": {
+                    "voltage_v": round(voltage, 2),
+                    "current_a": round(current, 2),
+                    "power_kw": round((voltage * current) / 1000.0, 3) #Calculates true power
+                },
+                "security_flag": int(is_anomaly) # Designate reading as an error or not. 
+            }
+
+            # Serialize data to string/bytes
+            # Needed to convert Python Dict to standard JSON-formatted text string
+            # encode coverts JSON into sequence of raw bytes (binary data)
+            # Binary data needed because Network sockets/ IoT protocols transport bytes
+            message_bytes = json.dumps(payload).encode('utf-8')
+
+            # Retry loop for local buffer handling 
+            while True:
+                try:
+                    # Produce message non-blockingly to Kafka/Redpanda
+                    # sends IoT data payload to Apache Kafka cluster
+                    producer.produce(
+                        topic=TOPIC_NAME, 
+                        key=payload["device_id"], #use device_id as the partition key to order specific meter pkts
+                        value=message_bytes, 
+                        callback=delivery_report
+                    )
+                    break # Succes, break retry loop
+                except BufferError:
+                    # Catche instances where the local system buffers are full (max limit hit)
+                    # Queue is full wait briefly 50 ms for flush_worker to clear it.
+                    await asyncio.sleep(0.05)
+                except Exception as e:
+                   # Alert catastrophic non-buffer exceptions(e.g., missing partition, serialization)
+                   print(f"Permanent produce error on device {device_id}: {e}")
+                   break
+
+            await asyncio.sleep(EMIT_INTERVAL_SECONDS) #put current meter to sleep
+        
+    except asyncio.CancelledError:
+        # Expected exit signal on shutdown
+        # Graceful shutdown preventing unclean stack traces
+        pass
+
+async def main() -> None:
+    """Initializes the Kafka producer pipeline, spawns background flusher workers, 
+       and manages concurrent virtual smart grid device tasks.
+    """
+    print(f"Initializing Kafka Producer connecting to {BOOTSTRAP_SERVERS}...")
+
+    # Define configuration dictionary with string keys and mixed value types
+    producer_config: Dict[str, Any] = {
+        "bootstrap.servers": BOOTSTRAP_SERVERS,
+        "queue.buffering.max.messages": 500000, #max packets to prevent memory starvation issues 
+        "linger.ms": 10, # Artificially forces 10 ms pauses before batches to enable micro-bundling
+        "compression.type": "snappy", #Compress streaming records via snappy to save CPU cycles
+    }
+    
+    # Instantiate the confluent-kafka Producer client
+    producer: Producer = Producer(producer_config)
+
+    print(f"Launching {NUM_DEVICES} concurrent virtual smart grid devices...")
+
+    # Start the async flusher worker in the background to prevent network blockages
+    # Uses list comprehension to instantiate 1K independent smart meter simulatiors
+    flush_task: asyncio.Task[None] = asyncio.create_task(
+        kafka_flush_worker(producer)
+    )
+
+    # Comprehension to spawn and track all concurrent virtual device tasks
+    device_tasks: List[asyncio.Task[None]] = [
+        asyncio.create_task(simulate_smart_meter(i, producer))
+        for i in range(NUM_DEVICES)
+    ]
+
+    try:
+        # Keep the event loop running while all devices execute indefinitely
+        # *argument unpacks the list of devices 
+        await asyncio.gather(*device_tasks)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        print("\n🛑 Shutting down simulator pipeline safely...")
+    finally:
+        # 1. Stop all devices from generating more data
+        print("Stopping device simulation tasks...")
+        for task in device_tasks:
+            task.cancel()
+            
+        # Await device cancellation completion while swallowing raised CancelledErrors
+        await asyncio.gather(*device_tasks, return_exceptions=True)
+
+        # 2. Stop the background producer flusher worker task
+        flush_task.cancel()
+
+        # 3. Final blocking drain of internal Kafka network buffers
+        print("📥 Flushing remaining network packets in Kafka buffer...")
+        producer.flush(timeout=5)
+        print("✨ Shutdown complete.")
