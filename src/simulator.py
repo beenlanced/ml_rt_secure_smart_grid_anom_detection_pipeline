@@ -103,7 +103,7 @@ async def simulate_smart_meter(device_id: int, producer: Producer):
                 voltage = random.uniform(140.0, 160.0)  # Mimic severe real-grid malfunction of over-voltage spike
                 current = random.uniform(0.0, 2.0) # Mimic low current real-grid malfunction
                 # Log detected anomalies as warnings
-                logger.warning(f"[{meter_name}] Cyber-anomaly injected! V={voltage:.2f}V, I={current:.2f}A")
+                logger.warning(f"[{meter_name}] Cyber-anomaly injected! V={voltage:.2f}V, A={current:.2f}A")
  
 
             # Build structural data payload matching OT/IoT pipeline formats
@@ -194,7 +194,7 @@ async def main() -> None:
         kafka_flush_worker(producer)
     )
 
-    # Comprehension to spawn and track all concurrent virtual device tasks
+    # List comprehension to spawn and track all concurrent virtual device tasks
     device_tasks: List[asyncio.Task[None]] = [
         asyncio.create_task(simulate_smart_meter(i, producer))
         for i in range(NUM_DEVICES)
@@ -207,11 +207,9 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         # print("\n Shutting down simulator pipeline safely...")
         #Log the shutdown trigger event
-        logger.warning("Pipeline interruption detected. Initiating safe shutdown sequence...")
-
+        logger.warning("Pipeline interruption detected. Initiating safe shutdown sequence...")    
     finally:
-        # 1. Stop all devices from generating more data
-        #print("Stopping device simulation tasks...")
+        # Stop all devices from generating more data
         # Log the step-by-step cleanup process
         logger.info(f"Stopping {len(device_tasks)} device simulation tasks...")
         for task in device_tasks:
@@ -220,14 +218,14 @@ async def main() -> None:
         # Await device cancellation completion while swallowing raised CancelledErrors
         await asyncio.gather(*device_tasks, return_exceptions=True)
 
-        # 2. Stop the background producer flusher worker task
+        # Stop the background producer flusher worker task
         logger.info("Stopping background Kafka flush worker...")
         flush_task.cancel()
 
-        # 3. Final blocking drain of internal Kafka network buffers
-        #print("Flushing remaining network packets in Kafka buffer...")
+        # Final blocking drain of internal Kafka network buffers
+        # Ensure any remaining msgs in buffers are fully delivered to Kafka clusters before application exits
         logger.info("Flushing remaining network packets in local Kafka buffer...")
-        remaining_events = producer.flush(timeout=5)
+        remaining_events = producer.flush(timeout=5) #cuts off after 5 seconds if a connection fails.
 
         #print("✨ Shutdown complete.")
         if remaining_events > 0:
