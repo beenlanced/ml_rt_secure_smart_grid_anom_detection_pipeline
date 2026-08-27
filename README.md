@@ -64,3 +64,42 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 
 - [Home Appliance Voltage North America](https://whatissmartenergy.org/smart-grid-and-power-quality)
   Power quality refers to electricity that consistently meets the agreed-upon specifications for optimal and efficient use in home electronics. In North America, home appliances and electronics are designed to operate within a range of 106 volts to 127 volts of alternating current (AC). However, equipment operates most efficiently in a range of 114-126 volts (quantity of electricity), which is the standard for delivered voltage in North America.
+
+- [Operational Technology (OT) and Industrial IoT (IIO) pipelines, data payload formats]()
+
+1. The Core Structural RequirementsTo make raw sensor data usable for IT and cloud systems, a standard OT/IoT pipeline payload must structure four essential data layers:
+
+- Timestamp: The exact microsecond or millisecond the physical event occurred at the edge.
+
+- Asset Context (Metadata): Where the data came from (e.g., Enterprise → Site → Area → Line → Machine).
+
+- Telemetry Data (Metrics): The actual reading (Value), its unique tag identifier (ID), and its data type (Float, Int, Boolean).
+
+- Data Quality State: A flag showing if the sensor reading is "Good," "Bad," or "Stale/Uncertain".
+
+- Key Logging Implmentations
+
+* `Contextual Tagging`: Every log string prefixes [{meter_name}]. This is critical when running thousands of meters concurrently so you can trace individual device lifecycles.
+
+* `logger.debug()` for Telemetry: Pushing data out happens continuously. Using `DEBUG` ensures your main logs aren't choked by thousands of "success" messages during production.
+
+* `logger.warning()` for Congestion/Anomalies: Highlights when the system generates fake attacks or experiences **BufferError** bottlenecks that need infrastructure attention.
+
+* `exc_info=True` on Critical Errors: Turning this on instructs the logger to capture the entire system traceback stack, showing you exactly where a script-breaking crash occurred.
+
+## TESTS
+
+```bash
+pytest -v tests_simulator_new.py
+
+```
+
+### tests_simulator.py
+
+- `LogCaptureFixture`: Imported from `_pytest.logging` to explicitly reference pytest's internal native logging diagnostic framework capture class (caplog).
+
+- `MagicMock`: Used for test metrics instead of Mock since `confluent-kafka` properties rely on nested internal structures and magic methods (like `.kwargs` or `.__str__()`).
+
+-`asyncio.Task[None]`: Denotes async loop handles running tasks that terminate gracefully without returning an explicit scalar value.
+
+-`None`: Explicitly assigned to test methods and setup scripts to satisfy strict checking behaviors required by standard configurations like `mypy` or `pyright`.

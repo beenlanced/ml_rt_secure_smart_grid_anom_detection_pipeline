@@ -1,7 +1,7 @@
 [project]
 name = "iiot-project"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Real-Time, Secure Smart Grid Anomaly Detection Pipeline"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
