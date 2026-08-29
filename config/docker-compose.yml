@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # Kafka-compatible Streaming Broker
+  redpanda:
+    image: docker.io/redpandadata/redpanda:latest
+    container_name: smartgrid-redpanda
+    command:
+      - redpanda start
+      - --smp 1 # Restricst it to 1 CPU core thread
+      - --overprovisioned # Optimizes performance for running in a shared or containerized environment
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 #Set up two network listeners
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092" # Expose port 1902 to your local machine so external applications can publish or consume data
+      
+    # Healthcheck acts as the medical checkup for your streaming broker
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Time-Series Database
+  timescaledb:
+    image: timescale/timescaledb:latest-pg15
+    container_name: smartgrid-db
+    environment:
+      - POSTGRES_DB=smartgrid
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=securepassword123
+    ports:
+      - "5432:5432"
+    volumes:
+      - tsdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d smartgrid"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  tsdata:
