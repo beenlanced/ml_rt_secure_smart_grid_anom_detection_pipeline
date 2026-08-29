@@ -87,6 +87,63 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 
 * `exc_info=True` on Critical Errors: Turning this on instructs the logger to capture the entire system traceback stack, showing you exactly where a script-breaking crash occurred.
 
+## Docker Compose file
+
+### To Use the Docker file
+
+To start the infrastructure created by the docker compose file.
+
+- Open your terminal or command prompt.
+- Navigate to the directory containing your docker compose file file using the cd command:
+  cd /path/to/your/directory
+
+```bash
+docker compose up -d
+```
+
+Check that it works by issuing
+
+```bash
+docker compose ps
+```
+
+Look at the STATUS column. You will see it transition from (health: starting) to (healthy) once Redpanda and TimescaleDB are fully booted up and ready for action
+
+### About the Docker File
+
+This Docker Compose file sets up a data streaming and storage backbone typically used for IoT, telemetry, or real-time monitoring infrastructure. It spins up a high-performance [Redpanda]("https://www.redpanda.com/") messaging broker and a [TimescaleDB]("https://en.wikipedia.org/wiki/TimescaleDB") time-series database, configuring them to run in isolated containers that can communicate with each other and your host machine.
+
+- Redpanda
+
+Redpanda is a modern, high-performance streaming data platform that is fully API-compatible with Apache Kafka. Developers use it as a drop-in replacement for Kafka because it is written in C++ (instead of Java) and operates on a thread-per-core architecture.
+
+- `Healthcheck`: settings in Docker Compose configuration acts as the medical checkup for your streaming broker. It performs a strict evaluation timeline:
+  - `interval: 5s`: Docker runs rpk cluster info every 5 seconds.
+  - `timeout: 3s`: If the command takes longer than 3 seconds to respond, Docker treats that individual attempt as a failure.
+  - `retries: 5`: When the container first starts up, it is in a "starting" state. Docker gives it 5 consecutive failed checks (spanning roughly 25 seconds) to fully wake up before officially declaring the container `unhealthy`.
+
+  Unlike a generic process check (which just asks your operating system "Is the Redpanda program open?"), `rpk cluster info` asks the application "Are you actually functioning and ready to accept data?"
+
+- TimescaleDB (Time-Series Database)
+
+  TimescaleDB is an extension of PostgreSQL optimized for fast storage and analysis of time-stamped data.
+  - `image`: timescale/timescaledb:latest-pg15: Uses the official TimescaleDB image built on PostgreSQL 15.
+
+  - `environment`: Configures the default database credentials:
+    - `Database Name`: smartgrid
+    - `User`: postgres
+    - `Password`: securepassword123
+
+  - `ports`: Maps port **5432** from the container to your local computer, allowing standard PostgreSQL clients (like pgAdmin or DBeaver) to connect.
+
+  - `volumes`: Defines a named volume called tsdata.
+
+  It mounts to `/var/lib/postgresql/data` inside the database container. This ensures that even if you stop, delete, or update the database container, your stored data is safe and won't be lost.
+
+- `Implicit Network`: Because no specific network is defined, Docker Compose automatically creates a default virtual bridge network. Redpanda can communicate with TimescaleDB internally using their container names (redpanda and smartgrid-db) as hostnames.
+
+- `healthcheck`: Uses the `pg_isready` command to ensure the database is actively accepting connections before letting dependent services rely on it.
+
 ## TESTS
 
 ```bash
