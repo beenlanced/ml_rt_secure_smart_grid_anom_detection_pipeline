@@ -73,7 +73,7 @@ async def kafka_flush_worker(producer: Producer) -> None:
         producer.poll(0.01)  # Check queues for completed events trigger delivery_reports. Process pkts for 10ms
         await asyncio.sleep(0.01)  # Yield control to allow virtual meter to generate additional messages
 
-async def simulate_smart_meter(device_id: int, producer: Producer):
+async def simulate_smart_meter(device_id: int, producer: Producer) -> None:
     """
         Simulates a single physical smart meter node tracking electrical telemetry.
     
