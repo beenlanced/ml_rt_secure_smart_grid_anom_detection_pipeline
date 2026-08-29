@@ -2,6 +2,8 @@
 
 ### simulator.py
 
+(asyncio Simulation): Implements an asynchronous producer loop feeding a high-performance memory queue. It simulates real-world electrical patterns by generating normal baselines with random, intermittent anomaly spikes.
+
 - [asyncio library](https://realpython.com/async-io-python/) - provides ability to run concurrent code, you can run multiple tasks at the same time without making your computer wait around doing nothing. It helps your program multitask efficiently, especially when it is waiting on the internet or a database.
 
 - [confluent_kafka](https://www.youtube.com/watch?v=06iRM1Ghr1k)
@@ -89,6 +91,8 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 
 ## Docker Compose file
 
+(Kafka Infrastructure) : Contains a docker-compose.yml optimized using Redpanda (a C++ alternative to Kafka that scales without JVM tuning memory traps).
+
 ### To Use the Docker file
 
 To start the infrastructure created by the docker compose file.
@@ -143,6 +147,20 @@ Redpanda is a modern, high-performance streaming data platform that is fully API
 - `Implicit Network`: Because no specific network is defined, Docker Compose automatically creates a default virtual bridge network. Redpanda can communicate with TimescaleDB internally using their container names (redpanda and smartgrid-db) as hostnames.
 
 - `healthcheck`: Uses the `pg_isready` command to ensure the database is actively accepting connections before letting dependent services rely on it.
+
+## Producer
+
+The companion `aiokafka` producer is finely tuned with:
+
+- `linger_ms=10` to micro-batch events on the wire. Delays delivery by up to 10ms to let data gather. Prevents sending 100,000 individual network packets per second.
+
+- `batch_size=262144` caps ad data packet structure chunck size at 256KB. Packs thousands of smart meter metrics into a single optimized TCP transfer
+
+- `compression_type="zstd"` to minimize high network traffic without choking CPU. Compresses text-heavy JSON telemetry streams. Shrinks total data footprint on yu disk and network pipe by up to 70%
+
+- `acks=1` for high-throughput leader acknowledgment profiles. Acknolwedtes message receipt when leader Redpanda broker accepts it. Drastically decreases transmission round-trip wait time.
+
+---
 
 ## TESTS
 
