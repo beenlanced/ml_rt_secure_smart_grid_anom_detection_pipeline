@@ -15,17 +15,15 @@ NUM_DEVICES = 1000  # Parallel virtual smart meters manage concurrently
 EMIT_INTERVAL_SECONDS = 0.1  # 100ms standard grid frequency window - reporting rate of 10 telemetry updates per second
 
 # Set up logging for production readiness
-#logging.basicConfig(level=logging.INFO)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 #logger = logging.getLogger(__name__)
-logger = logging.getLogger("KafkaCallback")
+logger = logging.getLogger(__name__)
 # Configure the logger (Place this at the entry point of your application)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("SmartMeterSimulator")
+
 
 # Kafka Delivery Callback for Network Performance Monitoring
 def delivery_report(err: Optional[KafkaError], msg: Message) -> None:
