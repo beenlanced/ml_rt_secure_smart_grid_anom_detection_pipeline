@@ -1,0 +1,74 @@
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+    "formatters": {
+      "simple": {
+        "format": "[%(levelname)s | %(module)s | L%(lineno)d] %(asctime)s: %(message)s",
+        "datefmt": "%Y-%m-%dT%H:%M:%S%z"
+      },
+      "detailed": {
+        "format": "%(asctime)s - %(levelname)s - %(module)s- L%(lineno)d - %(message)s",
+        "datefmt": "%Y-%m-%dT%H:%M:%S%z"
+      },
+      "json": {
+        "()": "configs.logging_configs.mylogger.AppJSONFormatter",
+        "fmt_keys": {
+          "timestamp": "timestamp",
+          "level": "levelname",
+          "logger": "name",
+          "module": "module",
+          "function": "funcName",
+          "line": "lineno",
+          "thread_name": "threadName",
+          "message": "message"
+        }
+      }
+    },
+    "filters": {
+      "no_errors": {
+        "()": "configs.logging_configs.mylogger.NonErrorFilter"
+      }
+    },
+    "handlers": {
+      "stdout": {
+      "class": "logging.StreamHandler",
+      "formatter": "simple",
+      "stream": "ext://sys.stdout",
+      "filters": ["no_errors"]
+      },
+      "stderr": {
+        "class": "logging.StreamHandler",
+        "level": "WARNING",
+        "formatter": "detailed",
+        "stream": "ext://sys.stderr"
+      },
+      "file_json": {
+        "class": "logging.handlers.RotatingFileHandler",
+        "level": "DEBUG",
+        "formatter": "json",
+        "filename": "logs/flask_app_log.jsonl",
+        "maxBytes": 10000,
+        "backupCount": 3
+      },
+      "queue_handler": {
+        "class": "logging.handlers.QueueHandler",
+        "handlers": [
+          "stdout",
+          "stderr",
+          "file_json"
+        ],
+        "respect_handler_level": true
+      }
+    },
+    "loggers": {
+      "root": {
+        "level": "DEBUG",
+        "handlers": [
+          "queue_handler"
+        ]
+      },
+      "app":{
+        "level": "DEBUG"
+      }
+    }
+  }
