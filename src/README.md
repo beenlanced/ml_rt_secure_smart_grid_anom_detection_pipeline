@@ -169,7 +169,7 @@ Will need to execute the components in a specific order:
 1. stand up your infrastructure container, and then
 2. run your high-throughput Python simulation scripts.
 
-#### Starting the Infrastructure (Redpanda Broker) - Stream Execution Workflow
+#### Starting the Infrastructure (Redpanda Broker) - Producer.py-Stream Execution Workflow
 
 Follow this step-by-step pipeline execution order to stand up the simulation environment and verify the configurations
 
@@ -221,3 +221,89 @@ python producer.py
   ```bash
   head -n 5 logs/app_log.jsonl
   ```
+
+#### Starting the Infrastructure (Redpanda Broker) - Stream.py-Execution Workflow
+
+- 1. Establish the Infrastructure Baseline
+
+The simulator.py file points to `BOOTSTRAP_SERVERS = 'localhost:19092'`. Make sure your `Redpanda` cluster is fully up and running to receive data.
+
+```bash
+# 1. Spin up your smart-grid streaming environment
+docker compose up -d
+
+# 2. Verify containers are marked as healthy
+docker compose ps
+```
+
+- 2. `Auto-Create the Target Kafka Topic`
+
+`simulator.py` routes metrics to a topic named `smartgrid-telemetry`. To ensure smooth streaming without reliance on broker auto-creation rules, create the topic explicitly using `Redpanda's` built-in CLI tool (rpk):
+
+```bash
+docker exec -it smartgrid-redpanda rpk topic create smartgrid-telemetry --partitions 3
+```
+
+Using 3 partitions allows your 1,000 parallel virtual devices to stream concurrently without bottlenecks.
+
+- 3. Run the Stream Execution Test
+
+Execute the unified script from your local Python environment by opening a terminal and navigating to the directory where `simulator.py` exists and typing:
+
+```bash
+python simulator.py
+```
+
+Upon launching, your main terminal will immediately remain silent on stdout for default logs. This happens because the updated non-blocking filter (`NonErrorFilter`) and `stdout` stream handler route standard INFO events quietly to your background system threads.
+
+- 4. Validate Logging Channels & Stream Output
+
+Open a second terminal window to verify that your `QueueHandler` and background threads are routing traffic appropriately without stalling the execution loop:
+
+- Monitor the Stuctured JSON Log Stream
+
+Watch the logs populate in real time to verify that the custom `AppJSONFormatter` is appending data properly:
+
+```bash
+tail -f logs/app_log.jsonl
+```
+
+- Confirm the Module Namespace Name
+
+Verify that the entries contain your updated module tag. A valid structured JSON log record will look like this:
+
+```json
+{
+  "timestamp": "2026-09-03T...",
+  "level": "INFO",
+  "logger": "smartgrid.simulation",
+  "module": "simulator",
+  "message": "[meter_00042] Initializing smart meter simulation node."
+}
+```
+
+- Test Cyber-Anomaly Alerts (stderr)
+
+Your script injects a malicious grid anomaly roughly 0.5% of the time. These alerts bypass the standard filter and hit stderr as WARNING logs via your detailed formatter layout. Isolate these specific errors to ensure your network filters work:
+
+```bash
+tail -f logs/app_log.jsonl | grep "WARNING"
+```
+
+- 5. Verify Data Delivery on the Live Broker
+     To prove that the stream isn't just logging locally but is actively passing network traffic through `Redpanda`, read live packets directly out of the cluster's log stream:
+
+```bash
+docker exec -it smartgrid-redpanda rpk topic consume smartgrid-telemetry --num 5
+```
+
+if successful, you will see the raw, uncompressed operational telemetry payloads printed to your console window:
+
+```json
+{
+  "timestamp": 1788242400.12,
+  "device_id": "meter_00007",
+  "metrics": { "voltage_v": 120.4, "current_a": 14.8, "power_kw": 1.782 },
+  "security_flag": 0
+}
+```
