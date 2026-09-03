@@ -6,24 +6,19 @@ import time
 from typing import Any, Dict, List, Optional
 
 from confluent_kafka import KafkaError, Message, Producer
+from config.logging_configs.mylogger import setup_production_logging
 
+# ==============================================================================
+# Logging Configuration
+# ==============================================================================
+# Note: Do not execute basicConfig here anymore!
+logger: logging.Logger = logging.getLogger("smartgrid.simulation")
 
 # Configuration constants
 BOOTSTRAP_SERVERS = 'localhost:19092' # Initial address of local Kafka broker configuration to discover full cluster
 TOPIC_NAME = 'smartgrid-telemetry' # Sets target Kafka log stream where telemetry data is gets appended
 NUM_DEVICES = 1000  # Parallel virtual smart meters manage concurrently
-EMIT_INTERVAL_SECONDS = 0.1  # 100ms standard grid frequency window - reporting rate of 10 telemetry updates per second
-
-# Set up logging for production readiness
-#logger = logging.getLogger(__name__)
-logger = logging.getLogger(__name__)
-# Configure the logger (Place this at the entry point of your application)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-
+EMIT_INTERVAL_SECONDS = 0.1  # 100ms standard grid frequency window -reporting rate of 10 telemetry updates per second
 
 # Kafka Delivery Callback for Network Performance Monitoring
 def delivery_report(err: Optional[KafkaError], msg: Message) -> None:
@@ -235,6 +230,10 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # Instantiate the non-blocking queue logging architecture,
+    # the bootsrap code first
+    setup_production_logging()
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
