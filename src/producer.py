@@ -11,7 +11,7 @@ from config.logging_configs.mylogger import setup_production_logging
 # ==============================================================================
 # Logging Configuration
 # ==============================================================================
-# Note: Do not execute basicConfig here anymore!
+# Note: Do not execute basicConfig
 logger: logging.Logger = logging.getLogger("smartgrid.simulation")
 
 # ==============================================================================
