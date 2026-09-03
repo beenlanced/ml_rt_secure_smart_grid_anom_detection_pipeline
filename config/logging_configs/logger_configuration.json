@@ -11,7 +11,7 @@
         "datefmt": "%Y-%m-%dT%H:%M:%S%z"
       },
       "json": {
-        "()": "configs.logging_configs.mylogger.AppJSONFormatter",
+        "()": "config.logging_configs.mylogger.AppJSONFormatter",
         "fmt_keys": {
           "timestamp": "timestamp",
           "level": "levelname",
@@ -26,7 +26,7 @@
     },
     "filters": {
       "no_errors": {
-        "()": "configs.logging_configs.mylogger.NonErrorFilter"
+        "()": "config.logging_configs.mylogger.NonErrorFilter"
       }
     },
     "handlers": {
@@ -46,7 +46,7 @@
         "class": "logging.handlers.RotatingFileHandler",
         "level": "DEBUG",
         "formatter": "json",
-        "filename": "logs/flask_app_log.jsonl",
+        "filename": "logs/app_log.jsonl",
         "maxBytes": 10000,
         "backupCount": 3
       },
@@ -66,9 +66,6 @@
         "handlers": [
           "queue_handler"
         ]
-      },
-      "app":{
-        "level": "DEBUG"
       }
     }
   }
