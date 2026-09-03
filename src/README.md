@@ -169,13 +169,55 @@ Will need to execute the components in a specific order:
 1. stand up your infrastructure container, and then
 2. run your high-throughput Python simulation scripts.
 
-#### Starting the Infrastructure (Redpanda Broker)
+#### Starting the Infrastructure (Redpanda Broker) - Stream Execution Workflow
 
-1. Open a new terminal and navigate to the location of the docker-compose.yml file
-2. At the terminal line issue:
+Follow this step-by-step pipeline execution order to stand up the simulation environment and verify the configurations
+
+- 1. `Spin up the Container Infrastructure`
+
+Ensure your local terminal path matches the location of your `docker-compose.yml file` (i.e., navigate to the directory containg the compose file), then create and run the streaming containers in detached mode:
 
 ```bash
-docker compose up -d redpanda
+docker compose up -d
 ```
 
-`
+This starts **Redpanda** (listening locally on port 19092) and **TimescaleDB** (on port 5432).
+
+- 2. Confirm Infrastructure Health
+
+Before pushing massive message volumes, ensure the stream broker's medical checkup status passes successfully:
+
+```bash
+docker compose ps
+```
+
+Verify that both `smartgrid-redpanda` and `smartgrid-db` report an (healthy) status state.
+
+- 3. Execute the Streaming Script
+
+Run the high-throughput `producer` application from your host environment by opening a different terminal
+and executing:
+
+```bash
+python producer.py
+```
+
+- 4 Monitor Non-Blocking Logging Outputs
+  Open a secondary terminal split to actively view your decoupled streaming outputs across both standard channels and queryable JSON structures:
+  - Watch Standard Terminal Logs (INFO and below via stdout):
+
+  ```bash
+  tail -f logs/app_log.jsonl | grep -v "INFO"
+  ```
+
+  - Watch Cyber-Anomalies & Warnings (stderr):
+
+  ```bash
+  tail -f logs/app_log.jsonl | grep -v "WARNING"
+  ```
+
+  - Verify Structured JSON Production Logging Format:
+
+  ```bash
+  head -n 5 logs/app_log.jsonl
+  ```
