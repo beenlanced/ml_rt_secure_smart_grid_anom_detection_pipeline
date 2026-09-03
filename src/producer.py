@@ -6,14 +6,12 @@ import time
 
 from aiokafka import AIOKafkaProducer
 
+from config.logging_configs.mylogger import setup_production_logging
+
 # ==============================================================================
 # Logging Configuration
 # ==============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] (%(threadName)s) %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+# Note: Do not execute basicConfig here anymore!
 logger: logging.Logger = logging.getLogger("smartgrid.simulation")
 
 # ==============================================================================
@@ -175,4 +173,11 @@ async def main() -> None:
         logger.critical("Fatal crash caught in simulation loop matrix: %s", e, exc_info=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Instantiate the non-blocking queue logging architecture,
+    # the bootsrap code first
+    setup_production_logging()
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
