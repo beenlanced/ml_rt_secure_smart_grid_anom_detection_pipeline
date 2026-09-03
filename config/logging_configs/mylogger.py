@@ -3,9 +3,14 @@
 # records into structured, queryable JSON data. A common requirement in modern 
 # production environments that use log collectors like Datadog, Elasticsearch, or 
 # AWS CloudWatch.
+#
+# Additionally we add a bootstrapping utility function to decouple logging setup
+# from the application found in src/
 import datetime as dt
 import json
 import logging
+import logging.config
+import os  
 from typing import override
 
 
@@ -117,3 +122,51 @@ class NonErrorFilter(logging.Filter):
     @override
     def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
         return record.levelno <= logging.INFO
+
+
+# centralized bootstrapping utility function for logging setup
+def setup_production_logging(config_path: str = None):
+    """
+    Loads JSON logging configuration, ensures log directories exist,
+    applies dictConfig, and starts the internal QueueListener.
+    """
+
+    # If no path is provided, default relative to this file
+    if config_path is None:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(current_dir, "logger_configuration.json")
+
+    # 1. Ensure the target directory for file logs exists safely
+    # should be adjacent to configs/
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+    logs_dir = os.path.join(project_root, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # 2. Load configuration file
+    with open(config_path, "r") as f:
+      config_dict = json.load(f)
+
+    # Dynamically force the RotatingFileHandler to use the correct adjacent absolute path
+    absolute_log_path = os.path.join(logs_dir, "app_log.jsonl")
+    config_dict["handlers"]["file_json"]["filename"] = absolute_log_path
+      
+    # 3. Apply dictionary configuration
+    logging.config.dictConfig(config_dict)
+    
+    # 4. Resolve the QueueHandler and explicitly start its background thread listener
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.handlers.QueueHandler) and hasattr(handler, "listener"):
+
+            # Spawn dedicated lightweight background thread
+            # Background thread wakes up instantly whenever a smart meter generates a log. 
+            # It quietly pulls the log message out of the memory queue and handles the slow, 
+            # blocking disk and console writes (stdout, stderr, and RotatingFileHandler). 
+            # This keeps the main high-throughput simulation asyncio event loop 100% 
+            # free of I/O blocking delays.
+            handler.listener.start() 
+
+            # Register an exit hook to flush remaining queue messages on pipeline shutdown
+            import atexit
+            atexit.register(handler.listener.stop)
