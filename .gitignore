@@ -63,6 +63,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Keep the template tracked in GIT
+!.env.example
+
 #ignore MacOS DS_Store files
 .DS_Store
 
