@@ -93,12 +93,12 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
     producer: AIOKafkaProducer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVER,
         client_id=f"smartgrid-producer-{dispatcher_id}",
-        batch_size=262144, 
+        max_batch_size=262144, 
         linger_ms=10, 
         compression_type="zstd", 
         acks=1, 
-        max_request_size=5242880,
-        buffer_memory=67108864
+        max_request_size=5242880
+        #buffer_memory=67108864
     )
     
     logger.info("Starting Kafka Delivery Pipeline Dispatcher #%d...", dispatcher_id)
