@@ -1,43 +1,84 @@
-version: '3.8'
+version: '3.9'
 
 services:
   # Kafka-compatible Streaming Broker
   redpanda:
-    image: docker.io/redpandadata/redpanda:latest
+    image: docker.io/redpandadata/redpanda:v24.1.1
     container_name: smartgrid-redpanda
+    restart: unless-stopped
     command:
-      - redpanda start
-      - --smp 1 # Restricst it to 1 CPU core thread
-      - --overprovisioned # Optimizes performance for running in a shared or containerized environment
-      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092 #Set up two network listeners
+      - redpanda
+      - start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
       - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
     ports:
-      - "19092:19092" # Expose port 1902 to your local machine so external applications can publish or consume data
-      
-    # Healthcheck acts as the medical checkup for your streaming broker
+      - "19092:19092"
+    networks:
+      - smartgrid
+    environment:
+      - REDPANDA_ENVIRONMENT=docker
     healthcheck:
       test: ["CMD", "rpk", "cluster", "info"]
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Time-Series Database
   timescaledb:
-    image: timescale/timescaledb:latest-pg15
+    image: timescale/timescaledb:2.14.0-pg15
     container_name: smartgrid-db
+    restart: unless-stopped
     environment:
-      - POSTGRES_DB=smartgrid
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=securepassword123
+      POSTGRES_DB: ${POSTGRES_DB:-smartgrid}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
+    networks:
+      - smartgrid
     volumes:
       - tsdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d smartgrid"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-smartgrid}"]
       interval: 5s
       timeout: 3s
       retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  smartgrid:
+    driver: bridge
 
 volumes:
   tsdata:
+    driver: local

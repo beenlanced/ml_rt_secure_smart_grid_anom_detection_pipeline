@@ -93,25 +93,33 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 
 (Kafka Infrastructure) : Contains a docker-compose.yml optimized using Redpanda (a C++ alternative to Kafka that scales without JVM tuning memory traps).
 
-### To Use the Docker file
+### Make sure to create .env file in the same directory as the docker compose
 
-To start the infrastructure created by the docker compose file.
+Use the `.env.example` template tailored for the project. This file serves as a blueprint showing which keys are required without exposing actual sensitive passwords or configuration data.
 
-- Open your terminal or command prompt.
-- Navigate to the directory containing your docker compose file file using the cd command:
-  cd /path/to/your/directory
+To get everything running smoothly using this template, you or anyone else cloning the project should follow these steps:
 
-```bash
-docker compose up -d
-```
-
-Check that it works by issuing
+- Step 1: Copy the example file to create the active configuration file.
 
 ```bash
-docker compose ps
+cp .env.example .env
 ```
 
-Look at the STATUS column. You will see it transition from (health: starting) to (healthy) once Redpanda and TimescaleDB are fully booted up and ready for action
+- Step 2: Open the newly created `.env` file and replace `your_strong_password_here` with a real, secure password.
+
+- step 3: Now you are able to start containers using Docker Compose statements.
+
+### Update your .gitignore
+
+To completely ensure that no one accidentally pushes their private passwords to your Git repository, make sure your .gitignore file contains the following lines:
+
+```text
+# Ignore local environment deployment settings
+.env
+
+# Keep the template tracked in Git
+!.env.example
+```
 
 ### About the Docker File
 
@@ -169,13 +177,149 @@ Will need to execute the components in a specific order:
 1. stand up your infrastructure container, and then
 2. run your high-throughput Python simulation scripts.
 
-#### Starting the Infrastructure (Redpanda Broker)
+#### Starting the Infrastructure (Redpanda Broker) - Producer.py-Stream Execution Workflow
 
-1. Open a new terminal and navigate to the location of the docker-compose.yml file
-2. At the terminal line issue:
+Follow this step-by-step pipeline execution order to stand up the simulation environment and verify the configurations
+
+- 1. `Spin up the Container Infrastructure`
+
+Ensure your local terminal path matches the location of your `docker-compose.yml file` (i.e., navigate to the directory containg the compose file), then create and run the streaming containers in detached mode:
 
 ```bash
-docker compose up -d redpanda
+#docker compose up -d
+docker compose up -d --pull always
 ```
 
-`
+`--pull always`
+This starts **Redpanda** (listening locally on port 19092) and **TimescaleDB** (on port 5432).
+
+- 2. Confirm Infrastructure Health
+
+Before pushing massive message volumes, ensure the stream broker's medical checkup status passes successfully:
+
+```bash
+docker compose ps
+```
+
+Verify that both `smartgrid-redpanda` and `smartgrid-db` report an (healthy) status state.
+
+- 3. Execute the Streaming Script
+
+Run the high-throughput `producer` application from your host environment by opening a different terminal
+and executing:
+
+```bash
+python -m src.producer
+```
+
+- 4 Monitor Non-Blocking Logging Outputs
+  Open a secondary terminal split to actively view your decoupled streaming outputs across both standard channels and queryable JSON structures:
+  - Watch Standard Terminal Logs (INFO and below via stdout):
+
+  ```bash
+  tail -f logs/app_log.jsonl | grep -v "INFO"
+  ```
+
+  - Watch Cyber-Anomalies & Warnings (stderr):
+
+  ```bash
+  tail -f logs/app_log.jsonl | grep -v "WARNING"
+  ```
+
+  - Verify Structured JSON Production Logging Format:
+
+  ```bash
+  head -n 5 logs/app_log.jsonl
+  ```
+
+#### Starting the Infrastructure (Redpanda Broker) - Stream.py-Execution Workflow
+
+- 1. Establish the Infrastructure Baseline
+
+The simulator.py file points to `BOOTSTRAP_SERVERS = 'localhost:19092'`. Make sure your `Redpanda` cluster is fully up and running to receive data.
+
+```bash
+# 1. Spin up your smart-grid streaming environment
+docker compose up -d
+
+# 2. Verify containers are marked as healthy
+docker compose ps
+```
+
+- 2. `Auto-Create the Target Kafka Topic`
+
+`simulator.py` routes metrics to a topic named `smartgrid-telemetry`. To ensure smooth streaming without reliance on broker auto-creation rules, create the topic explicitly using `Redpanda's` built-in CLI tool (rpk):
+
+```bash
+docker exec -it smartgrid-redpanda rpk topic create smartgrid-telemetry --partitions 3
+```
+
+Using 3 partitions allows your 1,000 parallel virtual devices to stream concurrently without bottlenecks.
+
+- 3. Run the Stream Execution Test
+
+Execute the unified script from your local Python environment by opening a terminal and navigating to the directory where `simulator.py` exists and typing:
+
+```bash
+python -m src.simulator
+```
+
+Upon launching, your main terminal will immediately remain silent on stdout for default logs. This happens because the updated non-blocking filter (`NonErrorFilter`) and `stdout` stream handler route standard INFO events quietly to your background system threads.
+
+- 4. Validate Logging Channels & Stream Output
+
+Open a second terminal window to verify that your `QueueHandler` and background threads are routing traffic appropriately without stalling the execution loop:
+
+- Monitor the Stuctured JSON Log Stream
+
+Watch the logs populate in real time to verify that the custom `AppJSONFormatter` is appending data properly:
+
+```bash
+tail -f logs/app_log.jsonl
+```
+
+- Confirm the Module Namespace Name
+
+Verify that the entries contain your updated module tag. A valid structured JSON log record will look like this:
+
+```json
+{
+  "timestamp": "2026-09-04T00:47:42.609025+00:00",
+  "level": "DEBUG",
+  "logger": "smartgrid.simulation",
+  "module": "simulator",
+  "function": "simulate_smart_meter",
+  "line": 133,
+  "thread_name": "MainThread",
+  "message": "[meter_00990] Telemetry payload produced successfully."
+}
+```
+
+- Test Cyber-Anomaly Alerts (stderr)
+
+Your script injects a malicious grid anomaly roughly 0.5% of the time. These alerts bypass the standard filter and hit stderr as WARNING logs via your detailed formatter layout. Isolate these specific errors to ensure your network filters work:
+
+```bash
+tail -f logs/app_log.jsonl | grep "WARNING"
+```
+
+- 5. Verify Data Delivery on the Live Broker
+
+     To prove that the stream isn't just logging locally but is actively passing network traffic through `Redpanda`, read live packets directly out of the cluster's log stream:
+
+```bash
+docker exec -it smartgrid-redpanda rpk topic consume smartgrid-telemetry --num 5
+```
+
+if successful, you will see the raw, uncompressed operational telemetry payloads printed to your console window:
+
+```json
+{
+  "topic": "smartgrid-telemetry",
+  "key": "meter_00012",
+  "value": "{\"timestamp\": 1788482818.7060359, \"device_id\": \"meter_00012\", \"metrics\": {\"voltage_v\": 119.44, \"current_a\": 14.0, \"power_kw\": 1.672}, \"security_flag\": 0}",
+  "timestamp": 1788482818706,
+  "partition": 0,
+  "offset": 4
+}
+```

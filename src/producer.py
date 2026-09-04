@@ -6,14 +6,12 @@ import time
 
 from aiokafka import AIOKafkaProducer
 
+from config.logging_configs.mylogger import setup_production_logging
+
 # ==============================================================================
 # Logging Configuration
 # ==============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] (%(threadName)s) %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+# Note: Do not execute basicConfig
 logger: logging.Logger = logging.getLogger("smartgrid.simulation")
 
 # ==============================================================================
@@ -95,12 +93,12 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
     producer: AIOKafkaProducer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVER,
         client_id=f"smartgrid-producer-{dispatcher_id}",
-        batch_size=262144, 
+        max_batch_size=262144, 
         linger_ms=10, 
         compression_type="zstd", 
         acks=1, 
-        max_request_size=5242880,
-        buffer_memory=67108864
+        max_request_size=5242880
+        #buffer_memory=67108864
     )
     
     logger.info("Starting Kafka Delivery Pipeline Dispatcher #%d...", dispatcher_id)
@@ -175,4 +173,11 @@ async def main() -> None:
         logger.critical("Fatal crash caught in simulation loop matrix: %s", e, exc_info=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Instantiate the non-blocking queue logging architecture,
+    # the bootsrap code first
+    setup_production_logging()
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
