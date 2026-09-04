@@ -93,25 +93,33 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 
 (Kafka Infrastructure) : Contains a docker-compose.yml optimized using Redpanda (a C++ alternative to Kafka that scales without JVM tuning memory traps).
 
-### To Use the Docker file
+### Make sure to create .env file in the same directory as the docker compose
 
-To start the infrastructure created by the docker compose file.
+Use the `.env.example` template tailored for the project. This file serves as a blueprint showing which keys are required without exposing actual sensitive passwords or configuration data.
 
-- Open your terminal or command prompt.
-- Navigate to the directory containing your docker compose file file using the cd command:
-  cd /path/to/your/directory
+To get everything running smoothly using this template, you or anyone else cloning the project should follow these steps:
 
-```bash
-docker compose up -d
-```
-
-Check that it works by issuing
+- Step 1: Copy the example file to create the active configuration file.
 
 ```bash
-docker compose ps
+cp .env.example .env
 ```
 
-Look at the STATUS column. You will see it transition from (health: starting) to (healthy) once Redpanda and TimescaleDB are fully booted up and ready for action
+- Step 2: Open the newly created `.env` file and replace `your_strong_password_here` with a real, secure password.
+
+- step 3: Now you are able to start containers using Docker Compose statements.
+
+### Update your .gitignore
+
+To completely ensure that no one accidentally pushes their private passwords to your Git repository, make sure your .gitignore file contains the following lines:
+
+```text
+# Ignore local environment deployment settings
+.env
+
+# Keep the template tracked in Git
+!.env.example
+```
 
 ### About the Docker File
 
@@ -178,9 +186,11 @@ Follow this step-by-step pipeline execution order to stand up the simulation env
 Ensure your local terminal path matches the location of your `docker-compose.yml file` (i.e., navigate to the directory containg the compose file), then create and run the streaming containers in detached mode:
 
 ```bash
-docker compose up -d
+#docker compose up -d
+docker compose up -d --pull always
 ```
 
+`--pull always`
 This starts **Redpanda** (listening locally on port 19092) and **TimescaleDB** (on port 5432).
 
 - 2. Confirm Infrastructure Health
@@ -199,7 +209,7 @@ Run the high-throughput `producer` application from your host environment by ope
 and executing:
 
 ```bash
-python producer.py
+python -m src.producer
 ```
 
 - 4 Monitor Non-Blocking Logging Outputs
@@ -251,7 +261,7 @@ Using 3 partitions allows your 1,000 parallel virtual devices to stream concurre
 Execute the unified script from your local Python environment by opening a terminal and navigating to the directory where `simulator.py` exists and typing:
 
 ```bash
-python simulator.py
+python -m src.simulator
 ```
 
 Upon launching, your main terminal will immediately remain silent on stdout for default logs. This happens because the updated non-blocking filter (`NonErrorFilter`) and `stdout` stream handler route standard INFO events quietly to your background system threads.
@@ -274,11 +284,14 @@ Verify that the entries contain your updated module tag. A valid structured JSON
 
 ```json
 {
-  "timestamp": "2026-09-03T...",
-  "level": "INFO",
+  "timestamp": "2026-09-04T00:47:42.609025+00:00",
+  "level": "DEBUG",
   "logger": "smartgrid.simulation",
   "module": "simulator",
-  "message": "[meter_00042] Initializing smart meter simulation node."
+  "function": "simulate_smart_meter",
+  "line": 133,
+  "thread_name": "MainThread",
+  "message": "[meter_00990] Telemetry payload produced successfully."
 }
 ```
 
@@ -291,6 +304,7 @@ tail -f logs/app_log.jsonl | grep "WARNING"
 ```
 
 - 5. Verify Data Delivery on the Live Broker
+
      To prove that the stream isn't just logging locally but is actively passing network traffic through `Redpanda`, read live packets directly out of the cluster's log stream:
 
 ```bash
@@ -301,9 +315,11 @@ if successful, you will see the raw, uncompressed operational telemetry payloads
 
 ```json
 {
-  "timestamp": 1788242400.12,
-  "device_id": "meter_00007",
-  "metrics": { "voltage_v": 120.4, "current_a": 14.8, "power_kw": 1.782 },
-  "security_flag": 0
+  "topic": "smartgrid-telemetry",
+  "key": "meter_00012",
+  "value": "{\"timestamp\": 1788482818.7060359, \"device_id\": \"meter_00012\", \"metrics\": {\"voltage_v\": 119.44, \"current_a\": 14.0, \"power_kw\": 1.672}, \"security_flag\": 0}",
+  "timestamp": 1788482818706,
+  "partition": 0,
+  "offset": 4
 }
 ```
