@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_device_time ON grid_telemetry (device_id, timesta
 -- tells the database to group rows together by their specific device ID before compressing them.
 -- triggers a fundamental architectural shift in how PostgreSQL stores data: it transforms
 --     historical, time-series data from a traditional row-oriented store into a highly 
---     optimized column-oriented store. (Data grouping with arrary-based storage) 
+--     optimized column-oriented store. (Data grouping with arrary-based storage)
 ALTER TABLE grid_telemetry SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'device_id'
