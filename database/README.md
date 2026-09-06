@@ -15,4 +15,10 @@ This SQL script sets up a highly optimized, time-series data storage system usin
 
 It uses hypertables, an advanced PostgreSQL database table, designed to automatically partition time-series and event data into smaller, manageable pieces called chunks. Hypertables are often used for IoT and sensors to store high-frequency device metrics like temperature, humidity or GPS coordinates.
 
+The Schema.sql script sets up a query indexing to speed up data retrieval using a `composite index`.
+
+Next, the script peforms compressions settings such that it prepares the hypertable to use TimescaleDB's columnar compression engine. `compress_segmentby = 'device_id'` tells the database to group rows together by their specific device ID before compressing them. Because data from the same device changes predictably over time, grouping it this way allows compression algorithms to achieve up to a 90% reduction in disk space. It triggers a fundamental architectural shift in how PostgreSQL stores data: it transforms historical, time-series data from a traditional row-oriented store into a highly optimized column-oriented store. (Data grouping with arrary-based storage)
+
+Finally, and automation policy is inacted to automate the lifecycle of the data. It schedules a background job that checks for data chunks older than 2 hours and automatically compresses them. This creates a "hot/warm" data architecture: the most recent 2 hours of data remain uncompressed for ultra-fast modifications and real-time streaming inserts, while anything older is compressed to save massive amounts of storage.
+
 ## Consumer.py
