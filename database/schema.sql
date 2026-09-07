@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS grid_telemetry (
     voltage_v REAL NOT NULL,
     current_a REAL NOT NULL,
     power_kw REAL NOT NULL,
-    security_flag INT NOT NULL
+    security_flag BOOLEAN NOT NULL
 );
 
 -- 2. Convert the table into a TimescaleDB Hypertable partitioned by 1-hour chunks
