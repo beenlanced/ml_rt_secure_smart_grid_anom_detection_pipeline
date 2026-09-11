@@ -21,11 +21,12 @@ KAFKA_BOOTSTRAP_SERVER: str = "localhost:19092"
 KAFKA_TOPIC: str = "smartgrid.telemetry"
 TOTAL_METERS: int = 10000
 INTERVAL_SEC: float = 0.1  # 100 milliseconds boundary
+NUM_WORKERS: int = 100
 
 # Type Alias
 type JsonPayload = dict[str, any]
 
-async def generate_meter_reading(meter_id: int) -> JsonPayload:
+def generate_meter_reading(meter_id: int) -> JsonPayload:
     """
     Generates ultra-lightweight telemetry to save network bandwidth.
 
@@ -83,7 +84,7 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
     """
     High-throughput tuned Kafka producer pipeline with metrics logging. It drains 
     the memory queue rapidly, prepares structured objects, and dispatches them
-    efficiently onver the wire to Kafka/Redpanda
+    efficiently over the wire to Kafka/Redpanda.
 
     Args:
         dispatcher_id (int): network-dispatch (publisher) pipelines 
@@ -98,7 +99,6 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
         compression_type="zstd", 
         acks=1, 
         max_request_size=5242880
-        #buffer_memory=67108864
     )
     
     logger.info("Starting Kafka Delivery Pipeline Dispatcher #%d...", dispatcher_id)
@@ -139,7 +139,7 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
     except asyncio.CancelledError:
         logger.info("Dispatcher #%d received cancellation signal. Cleaning up resources...", dispatcher_id)
     except Exception as e:
-        logger.error("Dispatcher #%d encountered pipeline error: %s", dispatcher_id, e, exc_info=True)
+        logger.error("Dispatcher #%d encountered pipeline error:", dispatcher_id, e, exc_info=True)
     finally:
         await producer.stop()
         logger.info("Dispatcher #%d connection pool securely closed.", dispatcher_id)
