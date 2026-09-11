@@ -70,7 +70,7 @@ async def smart_meter_worker(worker_id: int, queue: asyncio.Queue[tuple[str, Jso
     while True:
         start_time: float = time.monotonic()
         
-        # Safe Data Dropping to preserves if full queue
+        # Safe data dropping if full queue.
         # If Kafka slows down, better to skip a few readings.
         # Make sure the simulation continues running real-time sync with clock
         for meter_id in range(start_idx, end_idx):
