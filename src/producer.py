@@ -96,6 +96,7 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
         queue (asyncio.Queue[tuple[str, JsonPayload]]): queue to handle messages.
 
     """
+    # Note Offloading string/JSON encoding to Kafka's background execution lifecycle
     producer: AIOKafkaProducer = AIOKafkaProducer(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVER,
         client_id=f"smartgrid-producer-{dispatcher_id}",
@@ -103,7 +104,9 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
         linger_ms=10, 
         compression_type="zstd", 
         acks=1, 
-        max_request_size=5242880
+        max_request_size=5242880,
+        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+        key_serializer=lambda k: k.encode('utf-8')
     )
     
     logger.info("Starting Kafka Delivery Pipeline Dispatcher #%d...", dispatcher_id)
@@ -118,15 +121,10 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
             #Pull raw tuples from the queue
             key, payload = await queue.get()
 
-            #Transfors native dict text string into compressed raw newtork bytes
-            serialized_payload: bytes = json.dumps(payload).encode('utf-8')
-
-            #Send message to the TOPIC, push onto the async nonblocking socket stream
-            await producer.send(
-                topic=KAFKA_TOPIC, 
-                value=serialized_payload, 
-                key=key.encode('utf-8')
-            )
+            # OPTIMIZATION: Use send_nowait() to avoid blocking the event loop per message.
+            # This passes bytes immediately to aiokafka's internal buffer for optimal batching.
+            producer.send_nowait(topic=KAFKA_TOPIC, value=payload, key=key)
+            
             queue.task_done()
             processed_count += 1
             
