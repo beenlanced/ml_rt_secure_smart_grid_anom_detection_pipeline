@@ -22,6 +22,7 @@ KAFKA_TOPIC: str = "smartgrid.telemetry"
 TOTAL_METERS: int = 10000
 INTERVAL_SEC: float = 0.1  # 100 milliseconds boundary
 NUM_WORKERS: int = 100
+NUM_DISPATCHERS: int = 4
 
 # Type Alias
 type JsonPayload = dict[str, any]
@@ -69,10 +70,17 @@ async def smart_meter_worker(worker_id: int, queue: asyncio.Queue[tuple[str, Jso
     while True:
         start_time: float = time.monotonic()
         
+        # Safe Data Dropping to preserves if full queue
+        # If Kafka slows down, better to skip a few readings.
+        # Make sure the simulation continues running real-time sync with clock
         for meter_id in range(start_idx, end_idx):
             reading: JsonPayload = generate_meter_reading(meter_id)
-            put_nowait((str(meter_id), reading))
-        
+            try:
+                put_nowait((str(meter_id), reading))
+            except asyncio.QueueFull:
+                # Log periodically or pass silently to maintain real-time execution speeds
+                logger.warning("Queue full! Dropping reading for meter %d", meter_id)
+
         elapsed: float = time.monotonic() - start_time
         sleep_time: float = max(0.0, INTERVAL_SEC - elapsed) #monitor execution speed
         
@@ -129,6 +137,7 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
             processed_count += 1
             
             # Periodically log throughput stats to avoid flooding stdout (Every 5 seconds)
+            # Non-blocking performance diagnostic logging
             current_time: float = time.monotonic()
             if current_time - last_reported_time >= 5.0:
                 throughput: float = processed_count / (current_time - last_reported_time)
@@ -142,16 +151,17 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
     except asyncio.CancelledError:
         logger.info("Dispatcher #%d received cancellation signal. Cleaning up resources...", dispatcher_id)
     except Exception as e:
-        logger.error("Dispatcher #%d encountered pipeline error:", dispatcher_id, e, exc_info=True)
+        logger.error("Dispatcher #%d encountered error:", dispatcher_id, e, exc_info=True)
     finally:
         await producer.stop()
-        logger.info("Dispatcher #%d connection pool securely closed.", dispatcher_id)
+        logger.info("Dispatcher #%d connection pool closed.", dispatcher_id)
 
 async def main() -> None:
     """
     Application entry point initializing workers, queues, and dispatch pipelines.
     """
     logger.info("Initializing Smart Grid Simulation cluster configuration...")
+
     # Build bounded storage buffer to avoid Out-Of-Memory (OOM)
     telemetry_queue: asyncio.Queue[tuple[str, JsonPayload]] = asyncio.Queue(maxsize=500000)
     
@@ -159,14 +169,14 @@ async def main() -> None:
     logger.info("Spawning 100 concurrent smart meter simulation workers...")
     workers: list[asyncio.Task[None]] = [
         asyncio.create_task(smart_meter_worker(i, telemetry_queue)) #event place in event loop
-        for i in range(100)
+        for i in range(NUM_WORKERS)
     ]
     
     # Spin up multiple pipeline dispatchers to clear the queue out to Redpanda/Kafka
     logger.info("Spawning 4 tuned Kafka publisher pipelines...")
     dispatchers: list[asyncio.Task[None]] = [
         asyncio.create_task(kafka_delivery_pipeline(i, telemetry_queue)) 
-        for i in range(4)
+        for i in range(NUM_DISPATCHERS)
     ]
     
     logger.info("Simulation matrix fully active. Pushing metrics data cluster...")
