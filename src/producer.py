@@ -47,26 +47,31 @@ def generate_meter_reading(meter_id: int) -> JsonPayload:
 async def smart_meter_worker(worker_id: int, queue: asyncio.Queue[tuple[str, JsonPayload]]) -> None:
     """
     Worker responsible for a subset of meters to balance event loop overhead.
+    Simulates a block of smart meters tightly aligned to the 100ms interval window
 
     Args:
-        worker_id (int): Total meters split into one o 100 concurrently running workers 
+        worker_id (int): Total meters split into one of 100 concurrently running workers 
                         (e.g., worker#0 simulates meters 0-99, worker#2 101-199, etc.))
 
         queue (asyncio.Queue[tuple[str, JsonPayload]]): queue to handle messages
 
     """
-    meters_per_worker: int = TOTAL_METERS // 100  
+    meters_per_worker: int = TOTAL_METERS // NUM_WORKERS  
     start_idx: int = worker_id * meters_per_worker
     end_idx: int = start_idx + meters_per_worker
 
     logger.debug("Worker %d initialized for meter range %d-%d", worker_id, start_idx, end_idx)
 
+    # Cache queue local references to optimize loop lookups
+    # avoids Python having to look up the attribute on the object 10,000 times
+    put_nowait = queue.put_nowait
+
     while True:
         start_time: float = time.monotonic()
         
         for meter_id in range(start_idx, end_idx):
-            reading: JsonPayload = await generate_meter_reading(meter_id)
-            await queue.put((str(meter_id), reading))
+            reading: JsonPayload = generate_meter_reading(meter_id)
+            put_nowait((str(meter_id), reading))
         
         elapsed: float = time.monotonic() - start_time
         sleep_time: float = max(0.0, INTERVAL_SEC - elapsed) #monitor execution speed
