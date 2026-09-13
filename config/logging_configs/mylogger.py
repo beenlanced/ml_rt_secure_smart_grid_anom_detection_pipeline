@@ -10,12 +10,16 @@ import datetime as dt
 import json
 import logging
 import logging.config
-import os  
-from typing import override
+import logging.handlers
+import os
+import queue
+import atexit
+from pathlib import Path
+from typing import Any, Final, override
 
-
-# A set containing the names of all default properties Python automatically injects into a log event
-LOG_RECORD_BUILTIN_ATTRS = {
+# Built-in attributes to ignore when parsing extra fields.
+# Python automatically injects these into a log event.
+LOG_RECORD_BUILTIN_ATTRS: Final[set[str]] = {
     "args",
     "asctime",
     "created",
@@ -41,16 +45,15 @@ LOG_RECORD_BUILTIN_ATTRS = {
     "taskName",
 }
 
-# A custom formatter that parses a log event, isolates your application's 
-# custom metadata, maps fields to customized JSON keys, and returns a 
-# JSON string instead of plain text.
 
-# When initializing this formatter, you can pass a dictionary called `fmt_keys`
-# to map default logging names (e.g. "time": "timestamp) to keys of your choice
 class AppJSONFormatter(logging.Formatter):
+    """
+    A custom formatter that parses a log event, isolates application metadata,
+    maps fields to customized JSON keys, and returns a structured JSON string.
+    """
     def __init__(
         self,
-       *args: str,
+        *args: str,
         fmt_keys: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
@@ -58,115 +61,131 @@ class AppJSONFormatter(logging.Formatter):
 
     @override
     def format(self, record: logging.LogRecord) -> str:
-        """
-        Converts logging.Record dictionary to JSON format
-        """
+        """Converts a logging.LogRecord object to a structured JSON string."""
         message = self._prepare_log_dict(record)
         return json.dumps(message, default=str)
 
-    def _prepare_log_dict(self, record: logging.LogRecord) -> dict[str, str | dt.datetime]:
-        """
-        Handles the translation of the logging message fields
-
-        Args:
-            record (logging.LogRecord): Log Record
-
-        Returns:
-            dict[str, str | dt.datetime]: the fields of the record
-        """
+    def _prepare_log_dict(self, record: logging.LogRecord) -> dict[str, Any]:
+        """Maps log fields to configured keys and appends exception traces."""
         always_fields = {
             "message": record.getMessage(),
             "timestamp": dt.datetime.fromtimestamp(
                 record.created, tz=dt.timezone.utc
             ).isoformat(),
         }
-        if record.exc_info is not None:
-            always_fields["exc_info"] = self.formatException(record.exc_info)
 
-        if record.stack_info is not None:
-            always_fields["stack_info"] = self.formatStack(record.stack_info)
-        
-        # dictionary comprehension takes the form 
-        # {key: value for (key, value) in iterable if condition}
-        # Note: Walrus Operator (:=) - The walrus operator let's use
-        #        calculate, assign, and test a variable all on the same
-        message = {
-            key: msg_val
-            if (msg_val := always_fields.pop(val, None)) is not None
-            else getattr(record, val)
-            for key, val in self.fmt_keys.items()
-        }
-        # takes whatever leftover key-value pairs remain in always_fields and 
-        # merges them directly into the message dictionary.
-        message.update(always_fields)
+        # Build primary map using specified schema keys from configuration
+        message = {}
+        for key, val in self.fmt_keys.items():
+            if val in always_fields:
+                message[key] = always_fields[val]
+            elif hasattr(record, val):
+                message[key] = getattr(record, val)
 
-        # record.__dict__ is a standard Python dictionary that holds all the 
-        #   attributes and values attached to the record object.
+        # Inject Tracebacks cleanly under modern query keys (works for critical + exc_info=True)
+        if record.exc_info:
+            message["exception"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            message["stack_trace"] = self.formatStack(record.stack_info)
 
-        # .items() allows the loop to iterate through these attributes as 
-        #  key (the attribute name) and val (the attribute value) pairs.
+        # Append extra metadata parameters seamlessly (e.g. logger.info("...", extra={...}))
         for key, val in record.__dict__.items():
             if key not in LOG_RECORD_BUILTIN_ATTRS:
-                # if the attribute is not a built-in one, it means it was added dynamically.
-                # Example: when using the `extra`` parameter in a log call, like below
-                #   logger.info("User logged in", extra={"user_id": 42, "ip_address": "10.0.0.1"})
                 message[key] = val
 
         return message
 
-# A standard logging filter designed to restrict high-severity logs 
-# from passing through a specific pipeline.
-# Custom logging filter that only allows log messages with a severity 
-# level of INFO or lower to pass through.
+
 class NonErrorFilter(logging.Filter):
+    """Custom logging filter allowing only INFO or lower severity logs to pass."""
     @override
-    def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
+    def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno <= logging.INFO
 
 
-# centralized bootstrapping utility function for logging setup
-def setup_production_logging(config_path: str = None):
+class DroppingQueue(queue.Queue):
     """
-    Loads JSON logging configuration, ensures log directories exist,
-    applies dictConfig, and starts the internal QueueListener.
+    A bounded queue that discards new items when full 
+    instead of blocking the application thread.
     """
+    def put(self, item, block=True, timeout=None):
+        try:
+            # Force non-blocking put to catch the Full exception instantly
+            super().put(item, block=False)
+        except queue.Full:
+            # Silently drop the log line to protect system stability.
+            # Alternatively, write a single emergency message directly to sys.__stderr__
+            pass
 
-    # If no path is provided, default relative to this file
-    if config_path is None:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        config_path = os.path.join(current_dir, "logger_configuration.json")
-
-    # 1. Ensure the target directory for file logs exists safely
-    # should be adjacent to configs/
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-    logs_dir = os.path.join(project_root, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
+def setup_production_logging(config_path: str | None = None) -> None:
+    """
+    Loads JSON logging configuration, explicitly links and manages the internal 
+    QueueListener thread to decouple blocking I/O from high-throughput application loops.
+    """
+    # 1. Resolve paths deterministically using modern Pathlib
+    # Assumes this script lives in: repo_root/config/logging_configs/mylogger.py
+    current_file = Path(__file__).resolve()
+    config_dir = current_file.parent  # config/logging_configs/
+    project_root = current_file.parents[2]  # Climbs up 3 levels to the true repo root
     
-    # 2. Load configuration file
-    with open(config_path, "r") as f:
-      config_dict = json.load(f)
+    if config_path is None:
+        # Default fallback location if no custom path provided
+        config_path = str(config_dir / "logger_configuration.json")
 
-    # Dynamically force the RotatingFileHandler to use the correct adjacent absolute path
-    absolute_log_path = os.path.join(logs_dir, "app_log.jsonl")
-    config_dict["handlers"]["file_json"]["filename"] = absolute_log_path
+    logs_dir = project_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 2. Load and sanitize configuration file
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Logging configuration file not found at: {config_path}")
+        
+    with open(config_path, "r") as f:
+        config_dict = json.load(f)
+
+    # Force the RotatingFileHandler to use an absolute path targeting our verified logs directory
+    absolute_log_path = str(logs_dir / "app_log.jsonl")
+    if "handlers" in config_dict and "file_json" in config_dict["handlers"]:
+        config_dict["handlers"]["file_json"]["filename"] = absolute_log_path
       
     # 3. Apply dictionary configuration
     logging.config.dictConfig(config_dict)
     
-    # 4. Resolve the QueueHandler and explicitly start its background thread listener
+    # 4. Resolve the QueueHandler and manually bind its background QueueListener thread
     root_logger = logging.getLogger()
+    
+    # Find all target handlers configured in the root logger via standard dictionary lookup
+    # dictConfig will successfully instantiate the base handlers, but we must link them to the Queue
+    all_handlers = {h.name if hasattr(h, 'name') else name: h for name, h in logging._handlers.items()}
+    
     for handler in root_logger.handlers:
-        if isinstance(handler, logging.handlers.QueueHandler) and hasattr(handler, "listener"):
+        if isinstance(handler, logging.handlers.QueueHandler):
 
-            # Spawn dedicated lightweight background thread
-            # Background thread wakes up instantly whenever a smart meter generates a log. 
-            # It quietly pulls the log message out of the memory queue and handles the slow, 
-            # blocking disk and console writes (stdout, stderr, and RotatingFileHandler). 
-            # This keeps the main high-throughput simulation asyncio event loop 100% 
-            # free of I/O blocking delays.
+            # Enforce a strict upper bound of 50,000 log entries in memory.
+            # At ~300 bytes per structured JSON log, this caps memory usage at ~15MB.
+            bounded_memory_queue = DroppingQueue(maxsize=50000)
+            
+            # Swapping out the standard unbounded queue with our safe bounded version
+            handler.queue = bounded_memory_queue
+
+            # Check if dictConfig already set up a listener (rare in standard implementations)
+            if not hasattr(handler, "listener"):
+                # Manually extract the child handlers that dictConfig attached to the system
+                # or extract them directly from the logging module's initialized pool
+                stdout_handler = logging._handlers.get("stdout")
+                stderr_handler = logging._handlers.get("stderr")
+                file_handler = logging._handlers.get("file_json")
+
+                targets = [h for h in [stdout_handler, stderr_handler, file_handler] if h is not None]
+                
+                # Bind a fresh standard QueueListener mapping the memory queue to the physical handlers
+                handler.listener = logging.handlers.QueueListener(
+                    handler.queue, 
+                    *targets, 
+                    respect_handler_level=True
+                )
+
+            # Safely spin up the dedicated lightweight background thread
             handler.listener.start() 
 
-            # Register an exit hook to flush remaining queue messages on pipeline shutdown
-            import atexit
+            # Register an exit hook to flush remaining queue messages smoothly on application shutdown
             atexit.register(handler.listener.stop)
