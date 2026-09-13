@@ -4,6 +4,37 @@
 
 (asyncio Simulation): Implements an asynchronous producer loop feeding a high-performance memory queue. It simulates real-world electrical patterns by generating normal baselines with random, intermittent anomaly spikes.
 
+In real electrical grid, voltage doesn't randomly jump up and down. Voltage operates on a smooth, continuous time-series curve heavily dependent on total grid load and time of day.
+
+Additionally, while we could calculate power using `Apparent Power (kVA) (voltage * current)`, not true `Active Power (kW)`. Real `alternating current (AC)` grids have a `Power Factor (PF)` caused by inductive/capacitive loads (like motors or electronics), which means `True Power` is almost always lower than `V * I`. The script introduces a power*factor metrics and accurately calculates true electrical power (V * I \_ PF).
+Power factor is the measure of how efficiently electrical power is used in an alternating current (AC) circuit.
+
+Key Concepts
+
+- Real Power:
+  The actual electricity that does useful work, measured in watts (W) or kilowatts (kW).
+
+- Apparent Power:
+  The total power supplied to the circuit, measured in volt-amperes (VA).
+
+- Phase Angle ($\phi$): The time delay or difference between the voltage wave and the current wave.
+
+How It Works
+
+- Cosine of the Angle: Mathematically, the power factor equals the cosine of the phase angle ($\cos \phi$) between voltage and current.
+
+- Ratio Value: It is also the ratio of real power divided by apparent power.
+
+- Number Range: The value always falls between 0 and 1.
+
+`A Power Factor of 1 (Unity)`: Voltage and current are perfectly in phase. All power does useful work. This happens in purely resistive circuits.
+
+`Power Factor of 0`: Voltage and current are completely out of phase. No useful work is done. This happens in purely reactive circuits (like pure inductors or capacitors)
+
+`Low Power Factor`: Indicates wasted energy and requires more current to do the same job, which costs more money.
+
+Real power grids experience predictable daily peaks (e.g., high consumption in the evening when people come home, low consumption at 3:00 AM)-- Human-Driven Behavior. As a result, the script needs to take into account time of day to generate different baselines whether it is noon or midnight. The script uses a The cosine-wave implementation guarantees that your Kafka pipeline processes realistic traffic peaks and troughs that mimic real human behavior throughout a diurnal or 24-hour cycle. The simulator models the physical reality that when a household's current pull dramatically spikes, the localized voltage drops slightly.
+
 - [asyncio library](https://realpython.com/async-io-python/) - provides ability to run concurrent code, you can run multiple tasks at the same time without making your computer wait around doing nothing. It helps your program multitask efficiently, especially when it is waiting on the internet or a database.
 
 - [confluent_kafka](https://www.youtube.com/watch?v=06iRM1Ghr1k)
@@ -90,6 +121,8 @@ The Action: The 100 ms data window matches this physical timeline. It allows the
 * `exc_info=True` on Critical Errors: Turning this on instructs the logger to capture the entire system traceback stack, showing you exactly where a script-breaking crash occurred.
 
 ## Docker Compose file
+
+The docker-compose.yml file is an infrastructure orchestrator. It downloads and spins up your isolated application containers (Redpanda and TimescaleDB), sets up memory/CPU limits, creates a secure network link, and attaches physical storage volumes so data isn't deleted when the containers stop.
 
 (Kafka Infrastructure) : Contains a docker-compose.yml optimized using Redpanda (a C++ alternative to Kafka that scales without JVM tuning memory traps).
 
@@ -323,3 +356,7 @@ if successful, you will see the raw, uncompressed operational telemetry payloads
   "offset": 4
 }
 ```
+
+## Real-time Consumer & Ingestion script: consumer.py
+
+This script acts as your streaming consumer. It listens to the Redpanda/Kafka queue, decodes the incoming byte data, extracts metrics, computes moving calculations, and batch-inserts the records into TimescaleDB for ideal database performance.
