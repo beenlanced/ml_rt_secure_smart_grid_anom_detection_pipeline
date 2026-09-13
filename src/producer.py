@@ -18,7 +18,7 @@ logger: logging.Logger = logging.getLogger("smartgrid.simulation")
 # Infrastructure & Simulation Configurations
 # ==============================================================================
 KAFKA_BOOTSTRAP_SERVER: str = "localhost:19092"
-KAFKA_TOPIC: str = "smartgrid.telemetry"
+KAFKA_TOPIC: str = "smartgrid-telemetry"
 TOTAL_METERS: int = 10000
 INTERVAL_SEC: float = 0.1  # 100 milliseconds boundary
 NUM_WORKERS: int = 100
