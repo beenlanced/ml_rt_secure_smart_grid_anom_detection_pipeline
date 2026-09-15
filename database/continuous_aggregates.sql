@@ -8,6 +8,7 @@ SELECT
     AVG(voltage_v) AS avg_voltage,
     MAX(voltage_v) AS max_voltage,
     AVG(current_a) AS avg_current,
+    AVG(power_factor) AS avg_power_factor,
     SUM(power_kw) AS total_power_kw
 FROM grid_telemetry
 GROUP BY bucket, device_id
