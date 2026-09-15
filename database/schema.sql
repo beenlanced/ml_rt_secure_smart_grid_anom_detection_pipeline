@@ -5,10 +5,11 @@
 -- REALs are 4-byte floating point numbers 
 CREATE TABLE IF NOT EXISTS grid_telemetry (
     timestamp TIMESTAMPTZ NOT NULL,
-    device_id INT NOT NULL,
+    device_id VARCHAR(50) NOT NULL,
     voltage_v REAL NOT NULL,
     current_a REAL NOT NULL,
     power_kw REAL NOT NULL,
+    power_scale REAL NOT NULL,
     security_flag BOOLEAN NOT NULL
 );
 
