@@ -129,9 +129,9 @@ async def kafka_delivery_pipeline(dispatcher_id: int, queue: asyncio.Queue[tuple
             #Pull raw tuples from the queue
             key, payload = await queue.get()
 
-            # OPTIMIZATION: Use send_nowait() to avoid blocking the event loop per message.
+            # OPTIMIZATION: Use send() to avoid blocking the event loop per message.
             # This passes bytes immediately to aiokafka's internal buffer for optimal batching.
-            producer.send_nowait(topic=KAFKA_TOPIC, value=payload, key=key)
+            await producer.send(topic=KAFKA_TOPIC, value=payload, key=key)
             
             queue.task_done()
             processed_count += 1
