@@ -41,6 +41,9 @@ fi
 # CLEANUP ARCHITECTURE
 # ==============================================================================
 cleanup() {
+    # Remove all active traps immediately so this function cannot run twice
+    trap - EXIT INT TERM
+
     echo ""
     log_warn "Shutdown signal received! Cleaning up test cluster..."
     
