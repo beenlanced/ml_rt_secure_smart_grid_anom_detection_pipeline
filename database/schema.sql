@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS grid_telemetry (
     voltage_v REAL NOT NULL,
     current_a REAL NOT NULL,
     power_kw REAL NOT NULL,
-    power_scale REAL NOT NULL,
+    power_factor REAL NOT NULL,
     security_flag BOOLEAN NOT NULL
 );
 
