@@ -338,6 +338,7 @@ tail -f logs/app_log.jsonl | grep "WARNING"
 
 - 5. Verify Data Delivery on the Live Broker
 
+     Verify that producer.py is actively writing payloads into the Redpanda network layer by streaming raw data straight from your container.
      To prove that the stream isn't just logging locally but is actively passing network traffic through `Redpanda`, read live packets directly out of the cluster's log stream:
 
 ```bash
@@ -349,13 +350,23 @@ if successful, you will see the raw, uncompressed operational telemetry payloads
 ```json
 {
   "topic": "smartgrid-telemetry",
-  "key": "meter_00012",
-  "value": "{\"timestamp\": 1788482818.7060359, \"device_id\": \"meter_00012\", \"metrics\": {\"voltage_v\": 119.44, \"current_a\": 14.0, \"power_kw\": 1.672}, \"security_flag\": 0}",
-  "timestamp": 1788482818706,
+  "key": "7",
+  "value": "{\"timestamp\": 1789517476.925408, \"device_id\": \"meter_00007\", \"metrics\": {\"voltage_v\": 117.88, \"current_a\": 36.54, \"power_kw\": 3.884, \"power_factor\": 0.9}, \"security_flag\": 0}",
+  "timestamp": 1789517476958,
   "partition": 0,
   "offset": 4
 }
 ```
+
+- 6. Query TimescaleDB Metrics Insertion
+
+     If both the producer and consumer are healthy, entries should begin filling your hypertables. Bypass the applications and query the database storage engines directly:
+
+```bash
+docker exec -it smartgrid-db psql -U postgres -d smartgrid -c "SELECT * FROM grid_telemetry LIMIT 10;"
+```
+
+If it returns 0 rows: Your consumer is reading messages but failing silently during its batch transaction operations. Review your consumer error blocks to make sure exceptions aren't being swallowed.
 
 ## Real-time Consumer & Ingestion script: consumer.py
 
