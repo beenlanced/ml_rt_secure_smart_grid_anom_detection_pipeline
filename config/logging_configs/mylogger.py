@@ -10,11 +10,10 @@ import datetime as dt
 import json
 import logging
 import logging.config
-import logging.handlers
 import os
-import queue
 import atexit
 from pathlib import Path
+import sys
 from typing import Any, Final, override
 
 # Built-in attributes to ignore when parsing extra fields.
@@ -100,22 +99,8 @@ class NonErrorFilter(logging.Filter):
     """Custom logging filter allowing only INFO or lower severity logs to pass."""
     @override
     def filter(self, record: logging.LogRecord) -> bool:
-        return record.levelno <= logging.INFO
+        return record.levelno <= logging.WARNING
 
-
-class DroppingQueue(queue.Queue):
-    """
-    A bounded queue that discards new items when full 
-    instead of blocking the application thread.
-    """
-    def put(self, item, block=True, timeout=None):
-        try:
-            # Force non-blocking put to catch the Full exception instantly
-            super().put(item, block=False)
-        except queue.Full:
-            # Silently drop the log line to protect system stability.
-            # Alternatively, write a single emergency message directly to sys.__stderr__
-            pass
 
 def setup_production_logging(config_path: str | None = None) -> None:
     """
@@ -127,18 +112,18 @@ def setup_production_logging(config_path: str | None = None) -> None:
     current_file = Path(__file__).resolve()
     config_dir = current_file.parent  # config/logging_configs/
     project_root = current_file.parents[2]  # Climbs up 3 levels to the true repo root
-    
+
     if config_path is None:
         # Default fallback location if no custom path provided
         config_path = str(config_dir / "logger_configuration.json")
 
     logs_dir = project_root / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 2. Load and sanitize configuration file
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Logging configuration file not found at: {config_path}")
-        
+
     with open(config_path, "r") as f:
         config_dict = json.load(f)
 
@@ -146,46 +131,15 @@ def setup_production_logging(config_path: str | None = None) -> None:
     absolute_log_path = str(logs_dir / "app_log.jsonl")
     if "handlers" in config_dict and "file_json" in config_dict["handlers"]:
         config_dict["handlers"]["file_json"]["filename"] = absolute_log_path
-      
+
     # 3. Apply dictionary configuration
     logging.config.dictConfig(config_dict)
-    
-    # 4. Resolve the QueueHandler and manually bind its background QueueListener thread
-    root_logger = logging.getLogger()
-    
-    # Find all target handlers configured in the root logger via standard dictionary lookup
-    # dictConfig will successfully instantiate the base handlers, but we must link them to the Queue
-    all_handlers = {h.name if hasattr(h, 'name') else name: h for name, h in logging._handlers.items()}
-    
-    for handler in root_logger.handlers:
-        if isinstance(handler, logging.handlers.QueueHandler):
 
-            # Enforce a strict upper bound of 50,000 log entries in memory.
-            # At ~300 bytes per structured JSON log, this caps memory usage at ~15MB.
-            bounded_memory_queue = DroppingQueue(maxsize=50000)
-            
-            # Swapping out the standard unbounded queue with our safe bounded version
-            handler.queue = bounded_memory_queue
+    queue_handler = logging.getHandlerByName("queue_handler")
+    if queue_handler is not None:
+        queue_handler.listener.start()
+        atexit.register(queue_handler.listener.stop)
 
-            # Check if dictConfig already set up a listener (rare in standard implementations)
-            if not hasattr(handler, "listener"):
-                # Manually extract the child handlers that dictConfig attached to the system
-                # or extract them directly from the logging module's initialized pool
-                stdout_handler = logging._handlers.get("stdout")
-                stderr_handler = logging._handlers.get("stderr")
-                file_handler = logging._handlers.get("file_json")
-
-                targets = [h for h in [stdout_handler, stderr_handler, file_handler] if h is not None]
-                
-                # Bind a fresh standard QueueListener mapping the memory queue to the physical handlers
-                handler.listener = logging.handlers.QueueListener(
-                    handler.queue, 
-                    *targets, 
-                    respect_handler_level=True
-                )
-
-            # Safely spin up the dedicated lightweight background thread
-            handler.listener.start() 
-
-            # Register an exit hook to flush remaining queue messages smoothly on application shutdown
-            atexit.register(handler.listener.stop)
+    # Verifiy absolute bath to the log files
+    sys.__stdout__.write(f"CRITICAL PATH CHECK: Logs targeted at: {os.path.abspath(absolute_log_path)}\n")
+    sys.__stdout__.flush()
