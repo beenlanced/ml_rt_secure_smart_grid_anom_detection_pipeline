@@ -3,6 +3,7 @@ import logging
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Any, Final, Optional
 
@@ -41,12 +42,17 @@ db_password = os.getenv("POSTGRES_PASSWORD")
 BOOTSTRAP_SERVERS: Final[str] = 'localhost:19092'
 GROUP_ID: Final[str] = 'smartgrid-analytics-group'
 TOPIC_NAME: Final[str] = 'smartgrid-telemetry'
-DB_DSN: Final[str] = f"host=localhost dbname={db} user={db_user} password={db_password} port=5432"
 
-BATCH_SIZE: Final[int] = 500  # Micro-batching writes to optimize database performance
+# Add connect_timeout to the end of the DSN string break its silence and crash with an explicit error
+# Change host from smartgrid-db to 127.0.0.1 if running from local Mac
+# Since your docker-compose.yml file explicitly maps the database port to local machine ("127.0.0.1:5432:5432"),
+# make sure host is assigned localhost or 127.0.0.1.
+DB_DSN: Final[str] = f"host=127.0.0.1 dbname={db} user={db_user} password={db_password} port=5432 connect_timeout=5"
+BATCH_SIZE: Final[int] = 50  # Micro-batching writes to optimize database performance
+MAX_BATCH_AGE_SEC: Final[float] = 1.0 # Force flush after 1 second even if batch isn't full
 
 # Type Alias for database row structures
-type TelemetryRow = tuple[str, int, float, float, float, bool]
+type TelemetryRow = tuple[str, int, float, float, float, float, int]
 
 def create_db_connection() -> Optional[PgConnection]:
     """
@@ -70,12 +76,12 @@ def insert_batch_with_retry(conn: PgConnection, batch: list[TelemetryRow], max_r
             conn (PgConnection): Active database connection wrapper.
             batch (list[TelemetryRow]): List of structured telemetry tuples to insert.
             max_retries(int): Maximum number of retries
-    
+
     Returns:
         bool: True if the batch was written successfully, False otherwise.
     """
     query: Final[str] = """
-        INSERT INTO grid_telemetry (timestamp, device_id, voltage_v, current_a, power_kw, security_flag)
+        INSERT INTO grid_telemetry (timestamp, device_id, voltage_v, current_a, power_kw, power_factor, security_flag)
         VALUES %s;
     """
     retries = 0
@@ -98,7 +104,7 @@ def insert_batch_with_retry(conn: PgConnection, batch: list[TelemetryRow], max_r
             logger.error(f"Fatal error inserting batch into database: {e}", exc_info=True)
             conn.rollback()
             return False
-            
+
     logger.error("Failed to write batch to database after maximum retries.")
     return False
 
@@ -110,9 +116,15 @@ def main() -> None:
     consumer: Optional[Consumer] = None
     data_batch: list[TelemetryRow] = []
 
+    # --- DEBUG PRINTS TO CAPTURE THE FREEZE ---
+    sys.__stdout__.write("CONNECTING TO DATABASE...\n")
+    sys.__stdout__.flush()
+
     # 1. Initialize Database Connection
     try:
         db_conn = create_db_connection()
+        sys.__stdout__.write(f"DB_CONN: {db_conn}...\n")
+        sys.__stdout__.flush()
     except Exception as e:
         logger.critical("Fatal: Could not initialize database stream connection. Exiting...", exc_info=True)
         return
@@ -122,18 +134,27 @@ def main() -> None:
         logger.critical("Fatal: Database connection returned None. Exiting...")
         return
 
-
     # 2. Configure Kafka Consumer
     # Group IDs control offset tracking for access-management parity
     consumer_config: Final[dict[str, Any]] = {
         'bootstrap.servers': BOOTSTRAP_SERVERS,
         'group.id': GROUP_ID,
-        'auto.offset.reset': 'latest',
-        'enable.auto.commit': True,
-        'fetch.min.bytes': 1024 * 64,  # Wait for 64KB of data to lower CPU context switching
-        'linger.ms': 50
+        'auto.offset.reset': 'earliest',
+        'enable.auto.commit': False,
+
+        # --- CRITICAL FIX FOR MAC NETWORK FREEZES ---
+        # broker.address.family and network timeout parameters to
+        # force immediate IPv4 fallback and prevent infinite blocking loops
+        'broker.address.family': 'v4',          # Force IPv4 only (bypasses broken IPv6 loops)
+        'socket.timeout.ms': 2000,              # Prevent C driver from hanging forever on socket calls
+        #'metadata.request.timeout.ms': 2000,    # Drop connection attempts if cluster topology is unresponsive
+        
+        # --- PERFORMANCE & THROUGHPUT TUNING ---
+        'fetch.min.bytes': 65536,       # 64KB: Forces Kafka to batch messages together
+        'fetch.wait.max.ms': 50,         # Maximum time to wait if 64KB isn't met (prevents stale latency)
+        'max.poll.records': 500,         # Adjust based on processing speed per batch
     }
-    
+
     try:
         consumer: Consumer = Consumer(consumer_config)
         consumer.subscribe([TOPIC_NAME])
@@ -144,24 +165,48 @@ def main() -> None:
             db_conn.close()
         return
 
+    # Prevent data from getting trapped in computer memory if BATCH_SIZE is not reached
+    last_flush_time = time.time()
+
     #3. Stream Processing Loop
+    poll_count = 0
     try:
         while True:
             # Poll for new streaming network messages
-            msg: Optional[Message] = consumer.poll(timeout=1.0)
-            
+            msg: Optional[Message] = consumer.poll(timeout=0.1)
+
+            # Temporal Flush Verification Check (Handles data if batch size isn't met)
+            current_time = time.time()
+
+            if data_batch and (current_time - last_flush_time >= MAX_BATCH_AGE_SEC or len(data_batch) >= BATCH_SIZE):
+                success = insert_batch_with_retry(db_conn, data_batch)
+
+                if success:
+                    consumer.commit(asynchronous=False) # Commit offsets ONLY after DB confirm
+                    data_batch.clear()
+                    last_flush_time = current_time
+                else:
+                    logger.critical("Database pipeline broke down. Terminating consumer loop.")
+                    break
+
+            # Create a status pulse every 50 empty polls so your screen doesn't clear out too fast
             if msg is None:
+                poll_count += 1
+                if poll_count % 50 == 0:
+                    sys.__stdout__.write(f"[POLL PULSE]: Polled 50 times... waiting on Kafka broker messages.\n")
+                    sys.__stdout__.flush()
                 continue
+
             if msg.error():
                 if msg.error().code() == KafkaError._PARTITION_EOF:
                     continue
                 else:
                     raise KafkaException(msg.error())
-            
+
             # Parse message payload bytes to JSON
             try:
                 payload: dict[str, Any] = json.loads(msg.value().decode('utf-8'))
-                
+
                 # Real-Time threshold check parsing metrics on-the-fly
                 voltage: float = payload["metrics"]["voltage_v"]
                 if voltage > 135.0:
@@ -169,26 +214,17 @@ def main() -> None:
 
                 # Transform payload map into a database tuple row matching timezone expectations
                 dt_object: str = datetime.fromtimestamp(payload["timestamp"], tz=timezone.utc).isoformat()
-                
+
                 row: TelemetryRow = (
                     dt_object,
                     payload["device_id"],
                     voltage,
                     payload["metrics"]["current_a"],
                     payload["metrics"]["power_kw"],
+                    payload["metrics"]["power_factor"],
                     payload["security_flag"]
                 )
-                
                 data_batch.append(row)
-                
-                # If micro-batch is full, flush to TimescaleDB
-                if len(data_batch) >= BATCH_SIZE:
-                    success = insert_batch_with_retry(db_conn, data_batch)
-                    if not success:
-                        logger.critical("Database pipeline broke down permanently. Terminating loop to protect data tracking offsets.")
-                        break
-                    data_batch.clear()
-                    
             except Exception as e:
                 logger.error(f"Error parsing incoming message stream: {e}", exc_info=True)
 
@@ -205,8 +241,7 @@ def main() -> None:
                 insert_batch_with_retry(db_conn, data_batch, max_retries=1)
             except Exception:
                  logger.error("Could not flush final batch on shutdown; database unreachable.")
-            #insert_batch(db_conn, data_batch)
-        
+
         if consumer:
             try:
                 consumer.close()
@@ -222,8 +257,7 @@ def main() -> None:
                 logger.error("Failed to close database connection cleanly.", exc_info=True)
 
 if __name__ == "__main__":
-    # Instantiate the non-blocking queue logging architecture,
-    # the bootstrap code first
+    # Instantiate the non-blocking queue logging architecture
     setup_production_logging()
 
     try:
