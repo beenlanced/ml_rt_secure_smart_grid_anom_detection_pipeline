@@ -39,6 +39,26 @@ services:
         max-size: "10m"
         max-file: "3"
 
+ # Automated Topic Provisioning Engine
+  redpanda-init:
+    image: docker.io/redpandadata/redpanda:v24.1.1
+    container_name: smartgrid-redpanda-init
+    networks:
+      - smartgrid
+    depends_on:
+      redpanda:
+        condition: service_healthy  # Blocks execution until redpanda healthcheck passes
+    entrypoint: [ "sh", "-c" ]
+    command:
+      - |
+        rpk topic create smartgrid-telemetry --partitions 4 --brokers redpanda:9092
+        echo "Topic smartgrid-telemetry successfully initialized."
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
   # Time-Series Database
   timescaledb:
     image: timescale/timescaledb:2.14.0-pg15
