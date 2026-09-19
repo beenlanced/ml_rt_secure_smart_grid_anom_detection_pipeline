@@ -48,7 +48,7 @@
         "formatter": "json",
         "filename": "logs/app_log.jsonl",
         "maxBytes": 104857600,
-        "backupCount": 10
+        "backupCount": 5
       },
       "queue_handler": {
         "class": "logging.handlers.QueueHandler",
