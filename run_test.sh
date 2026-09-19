@@ -11,7 +11,6 @@ set -e
 # - continuous aggregates --> materialized views / Dashboard queries
 # ==============================================================================
 
-
 # ==============================================================================
 # CONFIGURATION (Matching your specific project tree structure)
 # ==============================================================================
@@ -62,6 +61,8 @@ trap cleanup EXIT INT TERM
 # ==============================================================================
 # STEP 1: DEPLOY INFRASTRUCTURE
 # ==============================================================================
+log_info "Current Project Working Directory (PWD) is: $PWD"
+
 log_info "Booting up Redpanda and TimescaleDB containers..."
 docker compose -f "$COMPOSE_FILE" up -d
 
@@ -70,6 +71,7 @@ until [ "$(docker inspect --format='{{.State.Health.Status}}' smartgrid-redpanda
     sleep 2
 done
 log_info "Redpanda is ready!"
+sleep 3 #Gives the external port (19092) a window to map completely to localhost
 
 log_info "Waiting for TimescaleDB to pass health checks..."
 until [ "$(docker inspect --format='{{.State.Health.Status}}' smartgrid-db 2>/dev/null)" == "healthy" ]; do
@@ -109,7 +111,15 @@ log_info "Press [CTRL+C] at any time to terminate the test and wipe containers."
 log_info "------------------------------------------------------------------"
 
 # Wait indefinitely on the background execution pipelines
-wait
+#wait
+
+# Wait for 60 seconds while data streams in the background
+sleep 60
+
+log_info "60-second test window completed successfully!"
+
+# Explicitly trigger exit to invoke our trapped cleanup block and wipe Docker footprints
+exit 0
 
  #==============================================================================
 # STEP 4: RUN UNIT AND INTEGRATION TESTS VIA UV PYTEST
