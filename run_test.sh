@@ -113,31 +113,32 @@ log_info "------------------------------------------------------------------"
 # Wait indefinitely on the background execution pipelines
 #wait
 
-# Wait for 60 seconds while data streams in the background
-sleep 60
+# Wait for 10 seconds while data streams in the background
+sleep 10
 
-log_info "60-second test window completed successfully!"
+log_info "10-second test window completed successfully!"
 
 # Explicitly trigger exit to invoke our trapped cleanup block and wipe Docker footprints
-exit 0
+# uncomment the exit 0 below and comment out all of section 4 if testing is not required
+#exit 0
 
  #==============================================================================
 # STEP 4: RUN UNIT AND INTEGRATION TESTS VIA UV PYTEST
 # ==============================================================================
-# log_info "Initiating test runner suite via uv run pytest..."
+log_info "Initiating test runner suite via uv run pytest..."
 
-# # Disable "exit immediately on error" temporarily so pytest can complete, 
-# # and we can accurately relay test suite health statuses.
-# set +e
-# uv run pytest tests/
-# TEST_EXIT_CODE=$?
-# set -e
+# Disable "exit immediately on error" temporarily so pytest can complete,
+# and we can accurately relay test suite health statuses.
+set +e
+uv run pytest tests/
+TEST_EXIT_CODE=$?
+set -e
 
-# if [ $TEST_EXIT_CODE -eq 0 ]; then
-#     log_info "🎉 All unit and integration test blocks passed smoothly!"
-# else
-#     log_err "❌ Test framework failures encountered (Exit Code: $TEST_EXIT_CODE)."
-# fi
+if [ $TEST_EXIT_CODE -eq 0 ]; then
+    log_info "🎉 All unit and integration test blocks passed smoothly!"
+else
+    log_err "❌ Test framework failures encountered (Exit Code: $TEST_EXIT_CODE)."
+fi
 
-# # Explicitly trigger exit to invoke our trapped cleanup block and wipe Docker footprints
-# exit $TEST_EXIT_CODE
+# Explicitly trigger exit to invoke our trapped cleanup block and wipe Docker footprints
+exit $TEST_EXIT_CODE
