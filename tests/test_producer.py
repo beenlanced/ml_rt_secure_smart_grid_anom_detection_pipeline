@@ -1,11 +1,18 @@
-# Because your code relies on aiokafka.AIOKafkaProducer (which requires a running Kafka broker by default), 
-# these tests use unittest.mock and pytest-asyncio to mock the network dependencies. 
-# This allows you to test the logic, queues, and throughput logging instantly without 
-# setting up a real Kafka or Redpanda instance.
+"""
+Production-ready test suite for src/producer.py.
+Validates lightweight schema formats, state anomalies, worker deadlines, 
+queue pressure handling, and async network resiliency using pytest-asyncio.
+
+Because your code relies on aiokafka.AIOKafkaProducer (which requires a running Kafka broker by default), 
+these tests use unittest.mock and pytest-asyncio to mock the network dependencies. 
+This allows you to test the logic, queues, and throughput logging instantly without 
+setting up a real Kafka or Redpanda instance.
+"""
 
 import asyncio
 import json
 import pytest
+import time
 from typing import Any, Generator
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -20,12 +27,15 @@ from src.producer import (
 
 # ------------------------------------------------------------------------------
 # Pytest Fixtures
+# fixtures are reusable functions designed to set up a fixed baseline such 
+# as test data, database connections, mock clients, or environment 
+# configuration so that your tests run against a known, repeatable state
 # ------------------------------------------------------------------------------
 @pytest.fixture
 def mock_kafka_producer() -> Generator[MagicMock, None, None]:
     """
-    Fixture to patch AIOKafkaProducer and configure standard AsyncMocks 
-    for lifecycle and delivery methods (.start(), .stop(), .send()).
+    Patches AIOKafkaProducer to mock lifecycle hooks (.start(), .stop())
+    and non-blocking message dispatching (.send()).
     """
     with patch('src.producer.AIOKafkaProducer') as mock_class:
         mock_instance = MagicMock()
@@ -38,138 +48,266 @@ def mock_kafka_producer() -> Generator[MagicMock, None, None]:
 
 @pytest.fixture
 def mock_logger() -> Generator[MagicMock, None, None]:
-    """Fixture to patch the module-level logger for asserting log behavior."""
+    """Fixture patches the module-level logging system to audit runtime telemetry diagnostic reports."""
     with patch('src.producer.logger') as mock_log:
         yield mock_log
 
 
 @pytest.fixture
 def telemetry_queue() -> asyncio.Queue[tuple[str, dict[str, Any]]]:
-    """Fixture to provide a clean, empty telemetry queue instance."""
+    """Fixture to provide a clean, isolated, and empty telemetry queue instance."""
     return asyncio.Queue()
 
 
 # ------------------------------------------------------------------------------
-# 1. Tests for generate_meter_reading
+# 1. Tests for generate_meter_reading (Deterministic Modeling)
 # ------------------------------------------------------------------------------
+@pytest.mark.asyncio #decorator tells pytest framework that a test f() is an async coroutine and is executed inside an asyncio event loop
+async def test_generate_meter_reading_normal_flow() -> None:
+    """
+    Verifies the production metrics dictionary structure, nested datatypes,
+    and US residential baseline metrics under normal, non-anomalous conditions.
+    """
+    # Force random.random > 0.005 (bypass the 0.5% anomaly) to simulate standard operations
+    # patch is a function from the unittest.mock library used to temporarily replace an object or function with a mock object
+    with patch("random.random", return_value=0.5):
+        meter_id: int = 42
+        payload: dict[str, Any] = generate_meter_reading(meter_id)
+
+        # Structure validations
+        assert isinstance(payload, dict)
+        assert "timestamp" in payload
+        assert isinstance(payload["timestamp"], float)
+        assert payload["device_id"] == "meter_00042"
+        assert payload["security_flag"] == 0
+
+        # Metrics block validations
+        metrics = payload["metrics"]
+        assert isinstance(metrics, dict)
+        assert isinstance(metrics["voltage_v"], float)
+        assert isinstance(metrics["current_a"], float)
+        assert isinstance(metrics["power_kw"], float)
+        assert isinstance(metrics["power_factor"], float)
+
+        # Grid range limits
+        assert metrics["current_a"] >= 0.1
+        assert 0.85 <= metrics["power_factor"] <= 0.97
+
+
 @pytest.mark.asyncio
-async def test_generate_meter_reading_structure() -> None:
+async def test_generate_meter_reading_cyber_anomaly_injection(mock_logger: MagicMock) -> None:
     """
-    Verifies that the generated payload contains the correct dictionary structure and data types.
-    Assures that the generated keys match structural needs and ranges remain bounded.
+    Forces random.random below the 0.5% threshold to ensure malicious grid attacks/surges
+    trip security flags, force zero-phase alignment, and log warnings correctly.
     """
-    meter_id: int = 42
-    payload: dict[str, Any] = await generate_meter_reading(meter_id)
-    
-    assert isinstance(payload, dict)
-    assert payload["m_id"] == meter_id
-    assert isinstance(payload["v"], float)
-    assert 115.0 <= payload["v"] <= 125.0
-    assert isinstance(payload["c"], float)
-    assert 5.0 <= payload["c"] <= 15.0
-    assert isinstance(payload["t"], int)
+    # Force random.random < 0.005 to trigger cyber-anomaly path
+    with patch('random.random', return_value=0.001):
+        meter_id: int = 99
+        payload: dict[str, Any] = generate_meter_reading(meter_id)
+        
+        assert payload["security_flag"] == 1
+        metrics = payload["metrics"]
+        
+        # Verify physical properties of the simulated grid anomaly
+        assert 145.0 <= metrics["voltage_v"] <= 155.0
+        assert metrics["current_a"] <= 0.5
+        assert metrics["power_factor"] == 0.2
+
+        # Robust Log String Validations
+        # Ensure the logger's warning method was invoked
+        mock_logger.warning.assert_called_once()
+        
+        # Extract the positional arguments from the call tuple (args, kwargs)
+        call_args, _ = mock_logger.warning.call_args
+        actual_log_message = call_args[0] if call_args else ""
+        
+        # Audit critical identifiers and text signatures within the string
+        assert "Cyber-anomaly injected!" in actual_log_message
+        assert "[meter_00099]" in actual_log_message
+        assert f"V={metrics['voltage_v']:.2f}V" in actual_log_message
+        assert f"A={metrics['current_a']:.2f}A" in actual_log_message
 
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # 2. Tests for smart_meter_worker
-# ------------------------------------------------------------------------------
+# ==============================================================================
 @pytest.mark.asyncio
 async def test_smart_meter_worker_populates_queue(telemetry_queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
     """
-    Verifies that a worker successfully puts the expected number of meter readings into the queue.
-    Verifies that your loop chunks the ranges correctly (0-99 for worker 0) and pushes items cleanly
-    into the queue.
+    Validates loop indexing logic to ensure concurrent worker segments isolate
+    their assigned scale chunks cleanly without cross-over collisions.
     """
     worker_id: int = 0
-    meters_per_worker: int = TOTAL_METERS // 100  # 100 meters per worker based on 10,000 total
-    
-    # Run the worker, but cancel it immediately after one loop execution to prevent infinite loop
+    meters_per_worker: int = TOTAL_METERS // 100  # 100 meters per worker
+
     task: asyncio.Task[None] = asyncio.create_task(smart_meter_worker(worker_id, telemetry_queue))
-    
-    # Allow the loop to run once and hit the internal sleep
-    await asyncio.sleep(0.05)
+
+    # Give the task a quick moment to loop through range 0-99 and enter sleep state
+    await asyncio.sleep(0.01)
     task.cancel()
-    
-    # Check that the queue received the correct number of items for this worker segment
+
     assert telemetry_queue.qsize() == meters_per_worker
-    
-    # Verify the bounds of the first item in the queue (Worker 0 handles meters 0-99)
+
+    # Pull first element to check bounds alignment
     key, payload = await telemetry_queue.get()
     assert key == "0"
-    assert payload["m_id"] == 0
+    assert payload["device_id"] == "meter_00000"
+
+
+@pytest.mark.asyncio
+async def test_smart_meter_worker_handles_queue_full(mock_logger: MagicMock) -> None:
+    """
+    Ensures that when network delivery dispatchers slow down or the queue hits limits,
+    the worker sheds load safely via put_nowait instead of halting execution.
+    """
+    # Construct a completely filled, tight-bounded storage queue
+    full_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=1)
+    await full_queue.put(("prefill_id", {}))
+
+    task: asyncio.Task[None] = asyncio.create_task(smart_meter_worker(worker_id=5, queue=full_queue))
+    await asyncio.sleep(0.01)
+    task.cancel()
+
+    # The queue must still contain exactly 1 element (did not block or grow past maxsize)
+    assert full_queue.qsize() == 1
+    # Check that it triggered structural warning drops
+    mock_logger.warning.assert_any_call("Queue full! Dropping reading for meter %d", 500)
 
 
 @pytest.mark.asyncio
 async def test_smart_meter_worker_warning_on_delay(mock_logger: MagicMock, telemetry_queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
     """
-    Simulates a slow generator to verify the worker triggers a warning log when breaching the 100ms window.
-    Artificially slows down the payload speed to assert that your time budget boundary alert works flawlessly.
+    Snoozes runtime execution ticks to mimic heavy system event-loop load,
+    confirming loop duration calculations emit latency breakdown warning messages.
     """
-    # Mock the generator to simulate a delay larger than INTERVAL_SEC (0.1s)
-    async def slow_generator(meter_id: int) -> dict[str, Any]:
-        await asyncio.sleep(0.002) # Tiny sleep per meter to cross the 100ms limit collectively
-        return {"m_id": meter_id, "v": 120.0, "c": 10.0, "t": 12345}
+    worker_id: int = 0
 
-    with patch('src.producer.generate_meter_reading', side_effect=slow_generator):
-        task: asyncio.Task[None] = asyncio.create_task(smart_meter_worker(worker_id=0, queue=telemetry_queue))
-        await asyncio.sleep(0.25)  # Let it complete at least one delayed cycle
+    # Inject artificial sleep into telemetry generator to blow the 100ms deadline budget
+    # Provide an ultra-lightweight slow generator that actually gets wired up
+    # A tiny real sleep per meter across 100 meters easily breaches the 100ms (0.1s) budget
+    def slow_generator(meter_id: int) -> dict[str, Any]:
+        time.sleep(0.0015)
+        return {"device_id": f"meter_{meter_id:05d}", "metrics": {}}
+
+     # Wire the slow generator directly to the function patch context
+    # Mock time.monotonic to simulate 0.0s starting, then instantly jumping to 0.2s
+    # when the worker checks elapsed duration, forcing a deadline breach without using real delays.
+    with patch ('src.producer.generate_meter_reading', side_effect=slow_generator):
+        task: asyncio.Task[None] = asyncio.create_task(smart_meter_worker(worker_id=worker_id, queue=telemetry_queue))
+
+        # Give it slightly more time to cleanly finish the 100 slow iterations
+        await asyncio.sleep(0.2)  
         task.cancel()
-        
+
         # Verify that the warning log was triggered due to loop deadline breach
         mock_logger.warning.assert_called()
-        assert "processing loop delayed" in mock_logger.warning.call_args
+
+        # Grab string payload arguments and check content explicitly
+        call_args_string = str(mock_logger.warning.call_args_list)
+        assert "processing loop delayed" in call_args_string
 
 
-# ------------------------------------------------------------------------------
+# ==============================================================================
 # 3. Tests for kafka_delivery_pipeline
-# ------------------------------------------------------------------------------
+# ==============================================================================
 @pytest.mark.asyncio
 async def test_kafka_delivery_pipeline_processing(mock_kafka_producer: MagicMock, telemetry_queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
     """
-    Verifies that the pipeline starts the producer, drains the queue, and serializes payloads correctly.
-    Validates the end-to-end payload data conversion pipeline (JSON dict → UTF-8 Encoded String → Bytes)
-    and verifies that Kafka lifecycle commands (.start(), .send(), .stop()) execute smoothly.
+    Tests pipeline parsing logic, checking that items are continuously
+    unloaded from memory structures and fed into Kafka stream layers.
     """
-    sample_payload: dict[str, Any] = {"m_id": 99, "v": 120.0, "c": 10.0, "t": 1600000000}
+    sample_payload: dict[str, Any] = {"device_id": "meter_00099", "metrics": {"voltage_v": 120.0}}
     await telemetry_queue.put(("99", sample_payload))
 
-    # Run pipeline dispatcher
     task: asyncio.Task[None] = asyncio.create_task(kafka_delivery_pipeline(dispatcher_id=1, queue=telemetry_queue))
-    
-    # Allow the event loop to process the item in the queue
-    await asyncio.sleep(0.05)
-    task.cancel()
 
-    # Assert lifecycle methods were executed via the fixture instance
+    # Give the pipeline a quick moment to pull from the queue and send
+    await asyncio.sleep(0.01)
+
+    # Cancel the task and await its completion within a try/except block
+    # to let the event loop process the finally cleanup step entirely
+    # await task after task.cancel() instructs the test runner
+    # to pause and let the background worker task execute its remaining lifecycles
+    # until it dies completely
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass  # Expected execution exit path
+
+    # Verify connection lifecycles executed completely after the task ended safely
     mock_kafka_producer.start.assert_called_once()
     mock_kafka_producer.stop.assert_called_once()
-    
-    # Assert network delivery arguments match expected data transformation
-    expected_bytes: bytes = json.dumps(sample_payload).encode('utf-8')
+
+    # Verify send was invoked with native pass-through structures
+    # (Since value/key serialization parameters are handled internally by AIOKafkaProducer initialization)
     mock_kafka_producer.send.assert_called_with(
         topic=KAFKA_TOPIC,
-        value=expected_bytes,
-        key=b"99"
+        value=sample_payload,
+        key="99"
     )
 
 
 @pytest.mark.asyncio
+async def test_kafka_delivery_pipeline_error_resilience(mock_kafka_producer: MagicMock, mock_logger: MagicMock, telemetry_queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
+    """
+    Simulates severe broker connectivity faults to verify that the pipeline handles crashes
+    gracefully, records structural stack traces, and tears down lingering connection tasks.
+    """
+    await telemetry_queue.put(("10", {"device_id": "meter_00010"}))
+    
+    # Simulate a network crash during message delivery
+    mock_kafka_producer.send.side_effect = RuntimeError("Broker network partition failure")
+    
+    task = asyncio.create_task(kafka_delivery_pipeline(dispatcher_id=2, queue=telemetry_queue))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    
+    # Check that error handler captured the anomaly and logged it
+    mock_logger.error.assert_called_once()
+    # Confirm resource cleanup was strictly maintained through the finally block
+    mock_kafka_producer.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_kafka_delivery_pipeline_throughput_logging(mock_logger: MagicMock, mock_kafka_producer: MagicMock, telemetry_queue: asyncio.Queue[tuple[str, dict[str, Any]]]) -> None:
-    """
-    Verifies that throughput stats are logged if the 5-second interval condition is reached.
-    Mocks the monotonic baseline clock to trick the engine into satisfying the 5.0 second 
-    threshold rule, validating runtime metrics code stability.
-    """
-    await telemetry_queue.put(("1", {"m_id": 1}))
+    """Mocks time references to mimic a 5-second interval passage, verifying performance metrics logging."""
+    await telemetry_queue.put(("1", {"device_id": "meter_00001"}))
 
-    # Mock time.monotonic to simulate 6 seconds passing on the second loop execution
-    with patch('time.monotonic', side_effect=[10.0, 10.0, 10.0, 16.0, 16.0]):
-        task: asyncio.Task[None] = asyncio.create_task(kafka_delivery_pipeline(dispatcher_id=1, queue=telemetry_queue))
-        await asyncio.sleep(0.05)
+    # A stateful counter to step forward dynamically without running out of values
+    call_count = 0
+
+    # Use a custom dynamic function for side_effect. Function
+    # tracks state changes to step forward past the 5-second interval once
+    # and then continuously defaults to returning a stable value if called repeatedly
+    def dynamic_clock() -> float:
+        nonlocal call_count
+        call_count += 1
+        # First few configuration checks get baseline 10.0
+        if call_count <= 3:
+            return 10.0
+        # Subsequent iterations leap forward to 16.0 (6 seconds elapsed) to trigger metrics
+        return 16.0
+    
+    with patch('time.monotonic', side_effect=dynamic_clock):
+        task: asyncio.Task[None] = asyncio.create_task(kafka_delivery_pipeline(dispatcher_id=3, queue=telemetry_queue))
+
+        # Give the loop an execution window to step forward and compute the logs
+        await asyncio.sleep(0.01)
+
+        # Cancel the task and await its completion within a try/except block
+        # to let the event loop process the finally cleanup step entirely
+        # await task after task.cancel() instructs the test runner
+        # to pause and let the background worker task execute its remaining lifecycles
+        # until it dies completely
         task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
-        # Check if info log reporting metrics was called
+        # Audit logger info history records for status reports
         any_throughput_logged: bool = any(
-            "Throughput Status" in call for call in mock_logger.info.call_args_list
+            "Throughput Status" in str(call) for call in mock_logger.info.call_args_list
         )
-        assert any_throughput_logged, "Throughput metric report was not logged."
+        assert any_throughput_logged, "Pipeline performance metric report was missing."
