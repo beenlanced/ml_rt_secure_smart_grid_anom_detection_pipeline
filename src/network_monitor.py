@@ -8,10 +8,11 @@ clocks to sustain packet stream ingest with minimal CPU overhead.
 """
 
 import logging
+import random
+from scapy.all import sniff, IP, IPv6, TCP
+from scapy.packet import Packet
 import time
 from typing import Optional, Any, Dict
-from scapy.all import sniff, IP, TCP
-from scapy.packet import Packet
 
 # Import the production logging infrastructure
 from config.logging_configs.mylogger import setup_production_logging
@@ -43,10 +44,12 @@ class StatefulPacketAnalyzer:
         """Executed instantly by Scapy's capture thread for each matched packet."""
 
         # 1. Defensively verify layer boundaries and extract in one pass
-        if not (packet.haslayer(IP) and packet.haslayer(TCP)):
+        has_ip = IP in packet or IPv6 in packet
+        if not (has_ip and packet.haslayer(TCP)):
             return
 
-        ip_layer: Any = packet[IP]
+        # Make sure to account for IPv4 and IPv6 traffic sent to localhost
+        ip_layer: Any = packet[IP] if IP in packet else packet[IPv6]
         tcp_layer: Any = packet[TCP]
 
         # 2. Performance metrics capture using non-drifting monotonic timers
@@ -62,6 +65,14 @@ class StatefulPacketAnalyzer:
         # 3. Extract core features (High-performance string conversion processing)
         # Using string representation of flags explicitly handles custom Scapy internal Flag types
         tcp_flags_str: str = str(tcp_layer.flags) if tcp_layer.flags else "None"
+
+        #Inject anomalies to simulate possible attacks or issues
+        inject_anomaly = random.random() < 0.005
+        if inject_anomaly:
+            if random.random() < 0.5:
+                packet_size = MAX_SAFE_PACKET_SIZE + 1000
+            else:
+                time_delta = MIN_TIME_DELTA - 0.00005
 
         feature_set: Dict[str, Any] = {
             "src_ip": str(ip_layer.src),
@@ -105,6 +116,10 @@ class StatefulPacketAnalyzer:
 
 def main() -> None:
     """Initializes and runs the kernel-filtered packet sniffer engine."""
+
+    # Configure the main thread's local execution logger instance
+    logger = logging.getLogger("smartgrid.network_monitor")
+
     logger.info("Starting Network Sniffer. Monitoring port %d...", TARGET_PORT)
     logger.info("Make sure your 'simulator.py' is running to generate active streaming traffic!")
     
@@ -114,13 +129,17 @@ def main() -> None:
     # Move target checking into the kernel BPF layer for speed optimization
     bpf_filter: str = f"tcp src port {TARGET_PORT} or tcp dst port {TARGET_PORT}"
 
+    # explicitly tell Scapy to sniff on the loopback interface (loO on Linux/macOS: verify using ifconfig)
+    # so it can intercept the localhost traffic
     try:
         sniff(
             filter=bpf_filter, 
             prn=analyzer, 
             count=PACKET_CAPTURE_COUNT,
+            iface='lo0',
             store=0  # Prevents memory footprint allocation expansion
         )
+        
         logger.info("Successfully captured and parsed a batch of %d packets.", PACKET_CAPTURE_COUNT)
         
     except PermissionError:
