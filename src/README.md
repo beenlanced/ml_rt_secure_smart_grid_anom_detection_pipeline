@@ -371,3 +371,128 @@ If it returns 0 rows: Your consumer is reading messages but failing silently dur
 ## Real-time Consumer & Ingestion script: consumer.py
 
 This script acts as your streaming consumer. It listens to the Redpanda/Kafka queue, decodes the incoming byte data, extracts metrics, computes moving calculations, and batch-inserts the records into TimescaleDB for ideal database performance.
+
+---
+
+# To test network_monitoring.py, locally using your simulator.py, and docker-compose.yml
+
+Coordinate three layers: the message broker infrastucture, the traffic generator, and the packet sniffer.
+
+1. Start the Docker Infrastructure
+   Your docker-compose.yml spins up a Redpanda cluster (a high-performance, Kafka-compatible broker) and exposes port 19092 to your host machine (localhost:19092). It also automatically creates the smartgrid-telemetry topic.Open your terminal and start the containers in the background:
+
+```bash
+docker compose up -d
+```
+
+Verify that Redpanda is healthy and running before proceeding:
+
+```bash
+docker compose ps
+```
+
+2. Run the Network Monitoring (Requires Root)
+   network_monitoring.py moves target filtering into the kernel using a Berkeley Packet Filter (BPF) matching port 19092. Capturing raw sockets at the kernel level requires root privileges on Linux/macOS or an Administrative command prompt with WinPcap/Npcap on Windows.
+
+Open a new terminal window and run the monitor with administrative rights:
+If you are using a virtual environment (like venv or poetry), you can tell sudo exactly which Python executable to use. This automatically includes all libraries installed inside that environment.
+Find the absolute path to your active virtual environment's Python, and pass it directly to sudo:
+
+```bash
+# On Linux / macOS:
+sudo /Users/lancehester/Documents/iiot_project/.venv/bin/python3 -m src.network_monitor
+
+
+# On Windows:
+# Open Command Prompt or PowerShell as Administrator and run:
+python network_monitoring.py
+
+```
+
+**Expected Log output:**
+Upon a successful startup, the script sets up its BPF filter engine [2] and will print out the following baseline info logs:
+
+```text
+CRITICAL PATH CHECK: Logs targeted at: /Users/lancehester/Documents/iiot_project/logs/app_log.jsonl
+[INFO | network_monitor | L108] 2026-09-29T17:28:30-0400: Starting Network Sniffer. Monitoring port 19092...
+[INFO | network_monitor | L109] 2026-09-29T17:28:30-0400: Make sure your 'simulator.py' is running to generate active streaming traffic!
+```
+
+3.  Run the Traffic `Simulatorsimulator.py` targets `localhost:19092` (the exact port Redpanda exposes on your host loopback interface). Because it generates traffic directly over your local loopback adapter (127.0.0.1), `Scapy` will catch these packets moving to and from the broker.
+
+Open a third terminal window and run the simulator (this does not need root):
+
+```bash
+python simulator.py
+/Users/lancehester/Documents/iiot_project/.venv/bin/python3 -m src.simulator
+```
+
+4.  What to look for during the test
+
+`Packets Stream in When the Simulator Runs`
+
+The sniffer is completely dependent on network activity. If Docker/Redpanda is running [3] and your simulator.py script [1] is generating smart meter telemetry, network_monitor.py will begin processing data.
+
+Will want to see:
+
+```text
+[INFO | network_monitor | L127] 2026-09-29T18:39:46-0400: Successfully captured and parsed a batch of 100 packets.
+```
+
+When you finally see the Successfully captured and parsed a batch of 100 packets. log message appear in your terminal, it means your entire network monitoring pipeline is fully functional and working exactly as designed.
+Specifically, it confirms that four critical engineering thresholds have been successfully met:
+
+1. Successful Network Interception
+   Your packet sniffer has successfully bound to the correct network interface. It is actively "seeing" the data streaming between your simulator.py script and the Redpanda/Kafka Docker container over port 19092.
+
+2. The Kernel Filter works perfectly
+   The Berkeley Packet Filter (bpf_filter) is correctly matching traffic. It ignored all irrelevant background noise on your computer (like web browsing or system updates) and isolated exactly 100 TCP packets bound to or from the smart grid broker.
+
+3. Deep Packet Inspection (DPI) is Passing
+   Your StatefulPacketAnalyzer successfully unpacked the raw network bytes. Every single one of those 100 packets cleanly passed your code's layer validation (packet.haslayer(IP) and packet.haslayer(TCP)) without encountering structural errors or corrupt data corruptions.
+
+4. The Data Loop Completed
+   The script did not freeze, drop packets, or leak memory. Because count=PACKET_CAPTURE_COUNT was set to 100, hitting this log line means the loop has reached its target, closed the packet capture window, and is now exiting cleanly.
+
+You will know it is working when your terminal prints either of these two log formats:
+• Standard Traffic Logs (Normal Operation):
+
+```test
+INFO:smartgrid.network_monitor:[NetFlow Log] Ingested 184B packet | Flags: PA | Latency Delta: 0.000452s
+```
+
+The Micro-Analysis Batch Completes
+The script is configured to analyze a specific sample window size defined by PACKET_CAPTURE_COUNT = 100. Once exactly 100 matching TCP packets have passed through port 19092, the script will log its final confirmation message and cleanly exit:
+Once all three windows are running, look for the following validation checkpoints across your terminal windows to confirm everything works:
+
+```text
+INFO:smartgrid.network_monitor:Successfully captured and parsed a batch of 100 packets.
+```
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 1. SIMULATOR TERMINAL │
+│ Look for normal throughput statements interspersed with anomalies: │
+│ [meter_00123] Cyber-anomaly injected! V=148.50V, A=0.25A │
+│ Dispatcher #0 Throughput Status: Sent 45000 records (~8950.41 msg/sec) │
+└──────────────────────────────────────────────────────────────────────────┘
+│
+(Generates raw TCP traffic)
+│
+▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 2. DOCKER/REDPANDA INFRASTRUCTURE │
+│ Ingests thousands of serialized payloads via port 19092. │
+└──────────────────────────────────────────────────────────────────────────┘
+│
+(Packets cross loopback/kernel)
+│
+▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│ 3. MONITOR TERMINAL (Scapy Capture Engine) │
+│ It intercepts the raw packets passing through port 19092. │
+│ Normal traffic looks like this: │
+│ INFO: [NetFlow Log] Ingested 125B packet | Flags: PA | Latency Delta: ...│
+│ │
+│ Triggering the high-frequency/DoS check (if interval < 0.1ms): │
+│ WARNING: [NETWORK ALERT] High-Frequency Traffic Flood (Possible DoS) ... │
+└──────────────────────────────────────────────────────────────────────────┘
