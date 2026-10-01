@@ -3,7 +3,6 @@ import json
 import logging
 import math
 import random
-import sys
 import time
 
 from aiokafka import AIOKafkaProducer
