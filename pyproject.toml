@@ -6,9 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiokafka[zstd]>=0.14.0",
+    "apache-flink>=2.1.0",
     "confluent-kafka>=2.15.0",
     "cramjam>=2.12.1",
-    "numpy>=2.5.2",
+    "numpy>=1.26.0,<2.2.0",
     "psycopg2-binary>=2.9.12",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -16,3 +17,6 @@ dependencies = [
     "ruff>=0.16.4",
     "scapy>=2.7.0",
 ]
+
+[tool.uv]
+build-constraint-dependencies = ["setuptools<82"]
