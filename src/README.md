@@ -496,3 +496,7 @@ INFO:smartgrid.network_monitor:Successfully captured and parsed a batch of 100 p
 │ Triggering the high-frequency/DoS check (if interval < 0.1ms): │
 │ WARNING: [NETWORK ALERT] High-Frequency Traffic Flood (Possible DoS) ... │
 └──────────────────────────────────────────────────────────────────────────┘
+
+---
+
+###
