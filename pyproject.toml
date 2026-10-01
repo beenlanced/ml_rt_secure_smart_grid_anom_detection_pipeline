@@ -14,4 +14,5 @@ dependencies = [
     "pytest-asyncio>=1.4.0",
     "python-dotenv>=1.2.3",
     "ruff>=0.16.4",
+    "scapy>=2.7.0",
 ]
