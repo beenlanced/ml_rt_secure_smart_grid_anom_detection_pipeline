@@ -499,4 +499,19 @@ INFO:smartgrid.network_monitor:Successfully captured and parsed a batch of 100 p
 
 ---
 
-###
+## Pylink
+
+JDBC stands for Java Database Connectivity. It is a standard application programming interface (API) provided by Java that allows Java applications to interact with various relational databases.
+Think of JDBC as a universal translator or a common database driver system. Instead of writing custom code for every specific database engine, a developer writes standard JDBC code, and the specific database driver translates those commands into a language the target database understands.
+
+### Why is a Java API being used in Python code?
+
+You might wonder why a Java tool is inside your Python script.
+Apache Flink’s core engine is written in Java. When you use PyFlink (Flink's Python API), it actually runs a Java virtual machine (JVM) under the hood. To write data out to a database efficiently at scale, PyFlink leverages Flink's robust, battle-tested Java JDBC Sink Engine to do the heavy lifting.
+
+Relational databases like PostgreSQL/TimescaleDB absolutely hate "micro-transactions" (inserting 1 row at a time, thousands of times a second). It forces the database disk to work incredibly hard dealing with network overhead, opening/closing transaction blocks, and locking rows.
+
+1. You lowered database stress: Moving the batch size up to 500 means the database processes fewer, larger chunks of work, lowering CPU and hard drive usage.
+2. You decreased your latency: Lowering the interval to 100ms ensures that your real-time dashboard data is never delayed by more than a tenth of a second, ensuring the stream feels truly "live."
+
+Elastic Environment Agnosticism: By utilizing os.getenv hooks with rigid, functional fallback configurations for Kafka brokers, network ports, and the dynamic JDBC_URL, this single script can transition seamlessly between a standard local workstation, a staging container, and a Kubernetes cluster topology without changing a single line of code.
